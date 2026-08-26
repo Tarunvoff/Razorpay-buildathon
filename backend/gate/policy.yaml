@@ -1,0 +1,4 @@
+# Payments-native policy rules — implemented in a later session.
+# Example shape (not yet enforced):
+# max_order_amount_paise: 500000
+# max_retries_per_order_window_seconds: 60

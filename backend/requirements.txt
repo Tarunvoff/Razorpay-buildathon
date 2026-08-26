@@ -1,0 +1,12 @@
+apiris>=1.0.2
+razorpay
+anthropic
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+pyyaml
+sqlite-utils
+pytest
+pytest-asyncio
+httpx
