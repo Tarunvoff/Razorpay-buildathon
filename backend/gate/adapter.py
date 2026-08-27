@@ -7,14 +7,23 @@ from apiris.config import ApirisConfig
 from apiris.decision_engine import DecisionEngine
 from apiris.evaluator import ObservationEvaluator
 
+from backend.audit.explainer import build_explanation
+from backend.gate.behavior import behavior_analyzer
+from backend.gate.policy import PolicyDecision, evaluate_policy
+
 Verdict = Literal["ALLOW", "BLOCK", "FLAG"]
 
 
-class GateResult(TypedDict):
+class GateResult(TypedDict, total=False):
     verdict: Verdict
     confidence: float
     explanation: str
+    summary: str
+    primary_factor: str
     apiris_score: Dict[str, Any]
+    behavior_signal: Dict[str, Any]
+    decision: Dict[str, Any]
+    explanation_record: Dict[str, Any]
 
 
 def create_apiris_engine(config: Optional[ApirisConfig] = None) -> tuple[ObservationEvaluator, DecisionEngine]:
@@ -29,7 +38,11 @@ def create_apiris_engine(config: Optional[ApirisConfig] = None) -> tuple[Observa
     return ObservationEvaluator(cfg), DecisionEngine(cfg)
 
 
-def score_payment_call(payment_call: dict, evaluator: Optional[ObservationEvaluator] = None, engine: Optional[DecisionEngine] = None) -> dict:
+def score_payment_call(
+    payment_call: dict,
+    evaluator: Optional[ObservationEvaluator] = None,
+    engine: Optional[DecisionEngine] = None,
+) -> dict:
     """
     Scores a Razorpay payment call through Apiris ObservationEvaluator
     and DecisionEngine.
@@ -146,11 +159,14 @@ def score_payment_call(payment_call: dict, evaluator: Optional[ObservationEvalua
 
 def check(payment_call: dict) -> GateResult:
     """
-    Evaluates the payment call through Apiris intelligence.
-    Extracts raw apiris action and calculates explicit inverted risk_weights.
-    Real payments-native policy enforcement (ALLOW/BLOCK/FLAG) combining Apiris + behavior
-    signal is wired in policy.py in Phase 4.
+    Evaluates the payment call through combined Apiris intelligence and RazorGate policy.
+    Combines:
+      1. Per-call Apiris intelligence scoring (risk_weight)
+      2. Session/agent behavioral drift & frequency signals (behavior.py)
+      3. Payments-native policy hierarchy (policy.py)
+      4. Auditable template-rendered explanation generation (explainer.py)
     """
+    # 1. Score payment call with Apiris
     apiris_eval = score_payment_call(payment_call)
     decision = apiris_eval.get("decision", {})
     scores = decision.get("scores", {})
@@ -159,7 +175,7 @@ def check(payment_call: dict) -> GateResult:
     c_score = float(scores.get("C_score", 1.0))
     a_score = float(scores.get("A_score", 1.0))
     d_score = float(scores.get("D_score", 1.0))
-    confidence = float(decision.get("confidence", 1.0))
+    apiris_conf = float(decision.get("confidence", 1.0))
     justification = str(decision.get("justification", "Scores within acceptable bounds"))
 
     # Explicit risk weight inversion: risk_weight = 1.0 - health_score
@@ -182,13 +198,50 @@ def check(payment_call: dict) -> GateResult:
             "D_score": d_score,
         },
         "integrityRate": scores.get("integrityRate", 0.0),
-        "confidence": confidence,
+        "confidence": apiris_conf,
         "justification": justification,
     }
 
+    # 2. Evaluate behavioral signal for the agent/session
+    agent_id = payment_call.get("agent_id") or payment_call.get("session_id") or "default_agent"
+    amount_paise = payment_call.get("amount", 0)
+
+    if "mock_behavior_signal" in payment_call:
+        behavior_signal = payment_call["mock_behavior_signal"]
+    else:
+        behavior_signal = behavior_analyzer.record_and_evaluate(
+            agent_id=agent_id,
+            amount_paise=amount_paise,
+        )
+
+    # 3. Evaluate combined payments-native policy rules
+    policy_decision: PolicyDecision = evaluate_policy(
+        payment_call=payment_call,
+        apiris_score=apiris_summary,
+        behavior_signal=behavior_signal,
+    )
+
+    # 4. Generate structured explanation record
+    currency = payment_call.get("currency", "INR")
+    explanation_record = build_explanation(
+        verdict=policy_decision.verdict,
+        primary_factor=policy_decision.primary_factor,
+        amount_inr=policy_decision.amount_inr,
+        confidence=policy_decision.confidence,
+        policy_reasons=policy_decision.reasons,
+        apiris_score=apiris_summary,
+        behavior_signal=behavior_signal,
+        currency=currency,
+    )
+
     return {
-        "verdict": "ALLOW",
-        "confidence": confidence,
-        "explanation": f"apiris evaluation: action={action}, risk_weight={composite_risk_weight:.2f} (health: A={a_score:.2f}, D={d_score:.2f}, C={c_score:.2f})",
+        "verdict": policy_decision.verdict,
+        "confidence": policy_decision.confidence,
+        "primary_factor": policy_decision.primary_factor,
+        "summary": explanation_record["summary"],
+        "explanation": explanation_record["summary"],
         "apiris_score": apiris_summary,
+        "behavior_signal": behavior_signal,
+        "decision": policy_decision.to_dict(),
+        "explanation_record": explanation_record,
     }

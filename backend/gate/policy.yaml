@@ -1,4 +1,19 @@
-# Payments-native policy rules — implemented in a later session.
-# Example shape (not yet enforced):
-# max_order_amount_paise: 500000
-# max_retries_per_order_window_seconds: 60
+# RazorGate Payments Policy Rules
+# Canonical ceiling & threshold definitions consumed across policy.py and behavior.py
+
+# Ceiling rule (Rule 1): max single order amount in INR (₹50,000 = 5,000,000 paise)
+max_order_amount_inr: 50000.0
+
+# Rate limits: max calls per agent in rolling window (consumed canonically by behavior.py)
+max_calls_per_agent_per_window: 5
+window_seconds: 300.0
+
+# Amount deviation threshold (standard deviations from agent baseline)
+amount_deviation_std_threshold: 3.0
+
+# Apiris risk thresholds (1.0 - health_score):
+# Rule 2: risk_weight >= apiris_risk_block -> BLOCK
+apiris_risk_block: 0.80
+
+# Rule 3: risk_weight >= apiris_risk_flag -> FLAG
+apiris_risk_flag: 0.40

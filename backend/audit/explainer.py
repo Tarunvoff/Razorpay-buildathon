@@ -1,17 +1,111 @@
 """
 Natural-language decision record generator for RazorGate.
-Adapted from cadlens's explainer architecture, tailored to payments-native
-risk factors, Apiris per-call scoring, and behavioral drift metrics.
+Produces structured, deterministic, template-rendered explanation records
+without any runtime LLM dependency.
 """
 
 from typing import Any, Dict, List, Optional
 
 
+def build_explanation(
+    verdict: str,
+    primary_factor: str,
+    amount_inr: float,
+    confidence: float,
+    policy_reasons: Optional[List[str]] = None,
+    apiris_score: Optional[Dict[str, Any]] = None,
+    behavior_signal: Optional[Dict[str, Any]] = None,
+    currency: str = "INR",
+) -> Dict[str, Any]:
+    """
+    Template-rendered decision explanation generator.
+
+    Constructs a plain-English, auditable summary and structured evidence payload
+    over the exact fields exposed by PolicyDecision and Apiris telemetry.
+    """
+    policy_reasons = policy_reasons or []
+    apiris_score = apiris_score or {}
+    behavior_signal = behavior_signal or {}
+
+    amount_fmt = f"₹{amount_inr:,.2f}"
+
+    # 1. Deterministic template rendering for summary based on primary_factor
+    if primary_factor == "amount_exceeded_ceiling":
+        summary = (
+            f"Transaction of {amount_fmt} BLOCKED: Exceeds policy amount ceiling. "
+            f"Rule reasons: {'; '.join(policy_reasons)}."
+        )
+    elif primary_factor == "apiris_high_risk":
+        rw = apiris_score.get("risk_weight", 1.0)
+        action = apiris_score.get("action", "unknown")
+        summary = (
+            f"Transaction of {amount_fmt} BLOCKED: High telemetry risk detected by Apiris "
+            f"(risk_weight: {rw:.2f}, action: {action})."
+        )
+    elif primary_factor == "apiris_and_behavior_risk":
+        rw = apiris_score.get("risk_weight", 0.0)
+        b_reasons = ", ".join(behavior_signal.get("reasons", []))
+        summary = (
+            f"Transaction of {amount_fmt} FLAGGED for verification: Both moderate telemetry risk "
+            f"(risk_weight: {rw:.2f}) and behavioral anomalies ({b_reasons}) detected."
+        )
+    elif primary_factor == "behavior_anomaly":
+        b_reasons = ", ".join(behavior_signal.get("reasons", []))
+        call_count = behavior_signal.get("session_call_count", 1)
+        summary = (
+            f"Transaction of {amount_fmt} FLAGGED for verification: Behavioral anomaly triggered "
+            f"({b_reasons}, {call_count} calls in rolling window)."
+        )
+    elif primary_factor == "apiris_moderate_risk":
+        rw = apiris_score.get("risk_weight", 0.0)
+        summary = (
+            f"Transaction of {amount_fmt} FLAGGED for verification: Moderate API telemetry risk "
+            f"(risk_weight: {rw:.2f})."
+        )
+    else:  # policy_cleared / ALLOW
+        summary = (
+            f"Transaction of {amount_fmt} APPROVED: All policy and telemetry safety checks passed."
+        )
+
+    # 2. Structured evidence payload
+    evidence = {
+        "apiris": {
+            "action": apiris_score.get("action", "pass_through"),
+            "risk_weight": apiris_score.get("risk_weight", 0.0),
+            "risk_weights": apiris_score.get("risk_weights", {}),
+            "health_scores": apiris_score.get("health_scores", {}),
+            "justification": apiris_score.get("justification", ""),
+        },
+        "behavior": {
+            "flag": behavior_signal.get("flag", False),
+            "reasons": behavior_signal.get("reasons", []),
+            "session_call_count": behavior_signal.get("session_call_count", 0),
+            "frequency": behavior_signal.get("frequency", 0),
+            "amount_deviation_zscore": behavior_signal.get("amount_deviation_zscore", 0.0),
+            "window_mean_amount": behavior_signal.get("window_mean_amount", 0.0),
+            "window_std_amount": behavior_signal.get("window_std_amount", 0.0),
+        },
+        "policy": {
+            "verdict": verdict,
+            "primary_factor": primary_factor,
+            "reasons": policy_reasons,
+            "amount_inr": amount_inr,
+        },
+    }
+
+    return {
+        "verdict": verdict,
+        "primary_factor": primary_factor,
+        "confidence": confidence,
+        "summary": summary,
+        "amount_inr": amount_inr,
+        "currency": currency,
+        "evidence": evidence,
+    }
+
+
 class DecisionExplainer:
-    """
-    Generates human-readable, auditable natural-language explanations
-    for RazorGate decisions (ALLOW, BLOCK, FLAG).
-    """
+    """Wrapper class providing backwards-compatible explainer interface."""
 
     @staticmethod
     def explain(
@@ -21,44 +115,18 @@ class DecisionExplainer:
         behavior_signal: Optional[Dict[str, Any]] = None,
         rules_triggered: Optional[List[str]] = None,
     ) -> str:
-        """
-        Produces an explainable summary of the gate decision.
-        """
-        amount_paise = payment_call.get("amount", 0)
-        currency = payment_call.get("currency", "INR")
-        amount_fmt = f"{amount_paise / 100:.2f} {currency}"
-        action = payment_call.get("action", "payment call")
-
-        rules_str = ", ".join(rules_triggered) if rules_triggered else "none"
-        parts = []
-
-        if verdict == "ALLOW":
-            parts.append(f"Approved {action} of {amount_fmt}.")
-            if apiris_score:
-                parts.append(
-                    f"Apiris scoring confirmed normal telemetry (integrity: {apiris_score.get('D_score', 1.0):.2f})."
-                )
-            if behavior_signal and not behavior_signal.get("drift_detected"):
-                parts.append("Session velocity and failure rate within safe bounds.")
-
-        elif verdict == "BLOCK":
-            parts.append(f"Blocked {action} of {amount_fmt}.")
-            if rules_triggered:
-                parts.append(f"Triggered safety policy rules: {rules_str}.")
-            if behavior_signal and behavior_signal.get("brownout_detected"):
-                parts.append("Elevated consecutive failure rate detected in session.")
-
-        elif verdict == "FLAG":
-            parts.append(f"Flagged {action} of {amount_fmt} for agent verification.")
-            if rules_triggered:
-                parts.append(f"Triggered threshold warning: {rules_str}.")
-            if apiris_score and apiris_score.get("integrityRate", 0) > 0.5:
-                parts.append("Statistical anomaly detected in API telemetry.")
-        else:
-            parts.append(f"Decision: {verdict} for {action} of {amount_fmt}.")
-
-        return " ".join(parts)
+        amount_raw = payment_call.get("amount", 0)
+        amount_inr = payment_call.get("amount_inr", amount_raw / 100.0)
+        record = build_explanation(
+            verdict=verdict,
+            primary_factor="policy_evaluation",
+            amount_inr=amount_inr,
+            confidence=1.0,
+            policy_reasons=rules_triggered,
+            apiris_score=apiris_score,
+            behavior_signal=behavior_signal,
+        )
+        return record["summary"]
 
 
-# Default explainer instance
 explainer = DecisionExplainer()

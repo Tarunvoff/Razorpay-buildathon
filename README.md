@@ -13,7 +13,7 @@ To prevent sign inversion bugs across downstream policy enforcement, `gate/adapt
 $$\text{risk\_weight} = 1.0 - \text{health\_score}$$
 - Near-`1.0` health &rarr; near-`0.0` risk_weight (minimal risk).
 - Near-`0.0` health (e.g. 500 error / latency surge) &rarr; near-`1.0` risk_weight (high risk).
-
+ 
 ### Behavioral Drift & Frequency Signals
 `gate/behavior.py` tracks rolling payment windows per `agent_id` to detect:
 1. `high_frequency`: Call bursts exceeding window threshold.

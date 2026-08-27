@@ -2,15 +2,36 @@
 Behavioral and session-level anomaly detector for RazorGate.
 Maintains a rolling time-window of payment events per agent_id behind a pluggable storage interface.
 
-Computes:
-1. Call frequency in rolling window (flags 'high_frequency' if call_count > frequency_threshold).
-2. Amount deviation (flags 'amount_deviation' if amount is > N std deviations from the running mean).
+CANONICAL THRESHOLD SOURCE:
+Default frequency thresholds and window sizes are read directly from policy.yaml
+via load_policy_config() to prevent threshold drift across files.
 """
 
 from dataclasses import dataclass
 import math
+from pathlib import Path
 import time
 from typing import Any, Dict, List, Optional, Protocol, Tuple
+import yaml
+
+POLICY_CONFIG_PATH = Path(__file__).parent / "policy.yaml"
+
+
+def _get_default_policy_thresholds() -> tuple[int, float, float]:
+    """Reads canonical window and frequency limits from policy.yaml."""
+    default_freq = 5
+    default_window = 300.0
+    default_std_thresh = 3.0
+    if POLICY_CONFIG_PATH.exists():
+        try:
+            with open(POLICY_CONFIG_PATH, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+                default_freq = int(cfg.get("max_calls_per_agent_per_window", default_freq))
+                default_window = float(cfg.get("window_seconds", default_window))
+                default_std_thresh = float(cfg.get("amount_deviation_std_threshold", default_std_thresh))
+        except Exception:
+            pass
+    return default_freq, default_window, default_std_thresh
 
 
 class WindowStore(Protocol):
@@ -58,14 +79,16 @@ class BehaviorAnalyzer:
 
     def __init__(
         self,
-        window_seconds: float = 300.0,
-        frequency_threshold: int = 5,
-        std_dev_threshold: float = 3.0,
+        window_seconds: Optional[float] = None,
+        frequency_threshold: Optional[int] = None,
+        std_dev_threshold: Optional[float] = None,
         store: Optional[WindowStore] = None,
     ) -> None:
-        self.window_seconds = window_seconds
-        self.frequency_threshold = frequency_threshold
-        self.std_dev_threshold = std_dev_threshold
+        # Load canonical defaults from policy.yaml if not explicitly supplied
+        cfg_freq, cfg_window, cfg_std = _get_default_policy_thresholds()
+        self.window_seconds = window_seconds if window_seconds is not None else cfg_window
+        self.frequency_threshold = frequency_threshold if frequency_threshold is not None else cfg_freq
+        self.std_dev_threshold = std_dev_threshold if std_dev_threshold is not None else cfg_std
         self.store = store if store is not None else InMemoryWindowStore()
 
     def record_and_evaluate(
@@ -76,6 +99,11 @@ class BehaviorAnalyzer:
     ) -> Dict[str, Any]:
         """
         Records an incoming payment call and calculates behavioral flags.
+
+        Evaluates two exact flag conditions:
+        1. high_frequency: call count in window > frequency_threshold
+        2. amount_deviation: amount deviates > std_dev_threshold standard deviations
+           from the agent's prior window baseline.
 
         Returns:
             Dict containing:
@@ -93,32 +121,37 @@ class BehaviorAnalyzer:
         # 1. Evict events outside rolling window
         self.store.evict(agent_id, cutoff)
 
-        # 2. Append current event and retrieve active window events
-        self.store.append(agent_id, now, amount_paise)
-        events = self.store.get(agent_id)
-        call_count = len(events)
+        # 2. Retrieve prior window history before appending current call
+        prior_events = self.store.get(agent_id)
+        prior_amounts = [amt for (_, amt) in prior_events]
+        prior_count = len(prior_amounts)
 
-        # 3. Compute amount statistics across window
-        amounts = [amt for (_, amt) in events]
-        if call_count < 2:
-            window_mean = float(amount_paise)
-            window_std = 0.0
-            z_score = 0.0
+        # 3. Compute baseline statistics from prior events
+        if prior_count >= 2:
+            prior_mean = sum(prior_amounts) / prior_count
+            sample_variance = sum((x - prior_mean) ** 2 for x in prior_amounts) / prior_count
+            sample_std = math.sqrt(sample_variance)
+            # Minimum variance scale floor (5% of mean) to avoid division by zero
+            effective_std = max(sample_std, 0.05 * prior_mean if prior_mean > 0 else 1.0)
+            z_score = abs(amount_paise - prior_mean) / effective_std
         else:
-            window_mean = sum(amounts) / call_count
-            variance = sum((x - window_mean) ** 2 for x in amounts) / call_count
-            window_std = math.sqrt(variance)
-            z_score = (
-                abs(amount_paise - window_mean) / window_std
-                if window_std > 0
-                else 0.0
-            )
+            prior_mean = float(amount_paise)
+            effective_std = 0.0
+            z_score = 0.0
 
-        # 4. Evaluate the two exact flag criteria
+        # 4. Append current event and retrieve full window state
+        self.store.append(agent_id, now, amount_paise)
+        all_events = self.store.get(agent_id)
+        call_count = len(all_events)
+        all_amounts = [amt for (_, amt) in all_events]
+        window_mean = sum(all_amounts) / call_count
+        window_std = math.sqrt(sum((x - window_mean) ** 2 for x in all_amounts) / call_count)
+
+        # 5. Evaluate the two exact flag criteria
         reasons: List[str] = []
         if call_count > self.frequency_threshold:
             reasons.append("high_frequency")
-        if call_count >= 2 and z_score > self.std_dev_threshold:
+        if prior_count >= 2 and z_score > self.std_dev_threshold:
             reasons.append("amount_deviation")
 
         is_flagged = len(reasons) > 0
