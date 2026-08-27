@@ -1,6 +1,7 @@
 """
 SQLite audit database for RazorGate.
-Persists auditable, structured decision records for every payment evaluation.
+Persists auditable, structured decision records for every payment evaluation,
+with forward-traceability linking gate decisions to real Razorpay order IDs.
 """
 
 from datetime import datetime, timezone
@@ -26,8 +27,9 @@ def init_db():
     column_names = {row[1] for row in table_info}
 
     if table_info and "agent_id" not in column_names:
-        # Legacy Phase 1 schema detected -> migrate to full Phase 5 schema
         conn.execute("DROP TABLE decisions")
+        table_info = []
+        column_names = set()
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS decisions (
@@ -40,11 +42,21 @@ def init_db():
             confidence REAL NOT NULL,
             primary_factor TEXT NOT NULL,
             summary TEXT NOT NULL,
-            evidence_json TEXT NOT NULL
+            evidence_json TEXT NOT NULL,
+            razorpay_order_id TEXT
         )
     """)
+
+    # Auto-migrate razorpay_order_id if not present
+    if table_info and "razorpay_order_id" not in column_names:
+        try:
+            conn.execute("ALTER TABLE decisions ADD COLUMN razorpay_order_id TEXT")
+        except Exception:
+            pass
+
     conn.execute("CREATE INDEX IF NOT EXISTS idx_decisions_agent ON decisions (agent_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_decisions_timestamp ON decisions (timestamp DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_decisions_rzp_order ON decisions (razorpay_order_id)")
     conn.commit()
     conn.close()
 
@@ -59,6 +71,7 @@ def record_decision(
     summary: str,
     evidence: Dict[str, Any],
     timestamp: Optional[str] = None,
+    razorpay_order_id: Optional[str] = None,
 ) -> int:
     """
     Persists a decision record into the SQLite ledger.
@@ -73,8 +86,8 @@ def record_decision(
         """
         INSERT INTO decisions (
             timestamp, agent_id, amount_paise, amount_inr,
-            verdict, confidence, primary_factor, summary, evidence_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            verdict, confidence, primary_factor, summary, evidence_json, razorpay_order_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             ts,
@@ -86,6 +99,7 @@ def record_decision(
             primary_factor,
             summary,
             evidence_json,
+            razorpay_order_id,
         ),
     )
     conn.commit()
@@ -94,30 +108,21 @@ def record_decision(
     return row_id or 0
 
 
-def log_decision(
-    request: dict,
-    verdict: str,
-    confidence: float,
-    explanation: str,
-    primary_factor: str = "policy_evaluation",
-    evidence: Optional[Dict[str, Any]] = None,
-) -> int:
-    """Backwards-compatible wrapper for legacy callers."""
-    amount_paise = int(request.get("amount", 0))
-    amount_inr = float(request.get("amount_inr", amount_paise / 100.0))
-    agent_id = str(request.get("agent_id") or request.get("session_id") or "default_agent")
-    evidence_data = evidence or {"request": request, "explanation": explanation}
-
-    return record_decision(
-        agent_id=agent_id,
-        amount_paise=amount_paise,
-        amount_inr=amount_inr,
-        verdict=verdict,
-        confidence=confidence,
-        primary_factor=primary_factor,
-        summary=explanation,
-        evidence=evidence_data,
+def link_order_to_decision(audit_id: int, razorpay_order_id: str) -> bool:
+    """
+    Links a downstream Razorpay order ID back to the originating gate decision row.
+    Enables forward-traceability from decision -> execution.
+    """
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.execute(
+        "UPDATE decisions SET razorpay_order_id = ? WHERE id = ?",
+        (razorpay_order_id, audit_id),
     )
+    conn.commit()
+    rows_affected = cursor.rowcount
+    conn.close()
+    return rows_affected > 0
 
 
 def get_recent_decisions(

@@ -4,12 +4,12 @@ Combines Apiris per-call risk scoring with session-level behavioral signals.
 
 Decision Hierarchy (First-match-wins):
 1. Amount over ceiling -> BLOCK unconditionally (confidence: 1.0 deterministic)
-2. Apiris risk_weight >= apiris_risk_block -> BLOCK (confidence: apiris confidence)
+2. Apiris risk_weight >= apiris_risk_block -> BLOCK (confidence: apiris confidence >= 0.90)
 3. Apiris risk_weight >= apiris_risk_flag OR behavior anomaly flag -> FLAG
    (Behavior flags can only ever escalate toward FLAG, never trigger BLOCK on their own)
-   (confidence: blended telemetry/behavior confidence, typically 0.80 - 1.00)
+   (Confidence scales dynamically from ~0.70 at the flag boundary up to ~0.95 near the block threshold)
 4. Otherwise -> ALLOW
-   (confidence: apiris_confidence * (1.0 - risk_weight), typically 0.90 - 1.00 for clean traffic)
+   (confidence: apiris_confidence * (1.0 - risk_weight), 1.00 for clean traffic)
 """
 
 from dataclasses import asdict, dataclass
@@ -77,6 +77,7 @@ def evaluate_policy(
     max_order_inr = float(cfg.get("max_order_amount_inr", 50000.0))
     risk_block_thresh = float(cfg.get("apiris_risk_block", 0.80))
     risk_flag_thresh = float(cfg.get("apiris_risk_flag", 0.40))
+    freq_limit = int(cfg.get("max_calls_per_agent_per_window", 5))
 
     # Parse amount in INR: if given in paise (standard Razorpay), convert to INR
     amount_raw = payment_call.get("amount", 0)
@@ -111,7 +112,7 @@ def evaluate_policy(
     if risk_weight >= risk_block_thresh:
         return PolicyDecision(
             verdict="BLOCK",
-            confidence=apiris_confidence,
+            confidence=round(apiris_confidence, 2),
             reasons=[
                 f"Apiris risk weight ({risk_weight:.2f}) at or above block threshold ({risk_block_thresh:.2f})"
             ],
@@ -126,14 +127,25 @@ def evaluate_policy(
     is_moderate_apiris_risk = risk_weight >= risk_flag_thresh
     if is_moderate_apiris_risk or behavior_flag:
         flag_reasons = []
+        apiris_flag_conf = 0.70
         if is_moderate_apiris_risk:
             flag_reasons.append(
                 f"Apiris risk weight ({risk_weight:.2f}) at or above flag threshold ({risk_flag_thresh:.2f})"
             )
+            # Boundary-distance scaling: confidence scales from 0.70 at flag threshold (0.40)
+            # up to 0.95 near the block threshold (0.80)
+            span = max(0.01, risk_block_thresh - risk_flag_thresh)
+            position = max(0.0, min(1.0, (risk_weight - risk_flag_thresh) / span))
+            apiris_flag_conf = round(0.70 + 0.25 * position, 2)
+
+        behavior_flag_conf = 0.70
         if behavior_flag:
             flag_reasons.append(
                 f"Behavioral anomalies detected: {', '.join(behavior_reasons)}"
             )
+            count = behavior_signal.get("session_call_count", freq_limit) if behavior_signal else freq_limit
+            excess = max(0, count - freq_limit)
+            behavior_flag_conf = round(min(0.95, 0.75 + 0.05 * excess), 2)
 
         primary_factor = (
             "apiris_and_behavior_risk"
@@ -143,16 +155,17 @@ def evaluate_policy(
             else "behavior_anomaly"
         )
 
-        # Blended confidence for flagged items
-        flag_confidence = (
-            max(apiris_confidence, 0.85)
+        final_flag_conf = (
+            max(apiris_flag_conf, behavior_flag_conf)
+            if (is_moderate_apiris_risk and behavior_flag)
+            else apiris_flag_conf
             if is_moderate_apiris_risk
-            else 0.80
+            else behavior_flag_conf
         )
 
         return PolicyDecision(
             verdict="FLAG",
-            confidence=round(flag_confidence, 2),
+            confidence=round(final_flag_conf, 2),
             reasons=flag_reasons,
             primary_factor=primary_factor,
             risk_weight=risk_weight,

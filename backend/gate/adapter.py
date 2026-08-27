@@ -10,6 +10,7 @@ from apiris.evaluator import ObservationEvaluator
 from backend.audit.explainer import build_explanation
 from backend.gate.behavior import behavior_analyzer
 from backend.gate.policy import PolicyDecision, evaluate_policy
+from backend.payments.razorpay_client import mint_allow_token
 
 Verdict = Literal["ALLOW", "BLOCK", "FLAG"]
 
@@ -20,6 +21,7 @@ class GateResult(TypedDict, total=False):
     explanation: str
     summary: str
     primary_factor: str
+    allow_token: Optional[str]
     apiris_score: Dict[str, Any]
     behavior_signal: Dict[str, Any]
     decision: Dict[str, Any]
@@ -165,6 +167,7 @@ def check(payment_call: dict) -> GateResult:
       2. Session/agent behavioral drift & frequency signals (behavior.py)
       3. Payments-native policy hierarchy (policy.py)
       4. Auditable template-rendered explanation generation (explainer.py)
+      5. Cryptographic ALLOW token minting for downstream Razorpay execution
     """
     # 1. Score payment call with Apiris
     apiris_eval = score_payment_call(payment_call)
@@ -234,12 +237,23 @@ def check(payment_call: dict) -> GateResult:
         currency=currency,
     )
 
+    # 5. Mint short-lived ALLOW token if verdict is ALLOW
+    allow_token = None
+    receipt = payment_call.get("receipt", f"rcpt_{int(time.time())}")
+    if policy_decision.verdict == "ALLOW":
+        allow_token = mint_allow_token(
+            agent_id=agent_id,
+            amount_paise=amount_paise,
+            receipt=receipt,
+        )
+
     return {
         "verdict": policy_decision.verdict,
         "confidence": policy_decision.confidence,
         "primary_factor": policy_decision.primary_factor,
         "summary": explanation_record["summary"],
         "explanation": explanation_record["summary"],
+        "allow_token": allow_token,
         "apiris_score": apiris_summary,
         "behavior_signal": behavior_signal,
         "decision": policy_decision.to_dict(),
