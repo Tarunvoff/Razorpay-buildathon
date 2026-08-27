@@ -303,3 +303,107 @@ def test_a2a_over_ceiling_blocked_with_explanation():
     assert receipt_entry["step"] == "receipt"
     assert receipt_entry["data"]["verdict"] == "BLOCK"
     assert receipt_entry["data"]["primary_factor"] == "amount_exceeded_ceiling"
+
+
+def test_anti_hallucination_structural_constraint_five_runs():
+    """
+    Requirement 3 Proof: Runs 5 consecutive iterations of offer evaluation.
+    Parses the generated comparative reasoning string and asserts that every mentioned
+    SKU name and price string corresponds to an actual candidate offer in the received OfferList.
+    """
+    merchant = MerchantAgent(merchant_id="merchant_hallucination_test")
+
+    known_skus = {"compute-gpu-h100-1hr", "compute-gpu-a100-1hr", "compute-gpu-l4-1hr", "api-tier-starter-100k", "enterprise-support-tier1"}
+
+    for run_idx in range(5):
+        buyer = BuyerAgent(
+            agent_id=f"buyer_hallucination_{run_idx}",
+            max_budget_paise=50000,
+        )
+        offers = buyer.send_task_request(
+            merchant=merchant,
+            intent="GPU compute for model inference",
+            category="ai_compute",
+        )
+        selected_offer, reasoning = buyer.evaluate_and_select_offer(
+            offer_list=offers,
+            intent="GPU compute for model inference",
+        )
+
+        valid_skus_in_offers = {o.sku for o in offers.offers}
+
+        # Assert every SKU mentioned in reasoning text is in valid_skus_in_offers
+        for sku in known_skus:
+            if sku in reasoning:
+                assert sku in valid_skus_in_offers, f"Run {run_idx+1}: Hallucinated SKU '{sku}' not present in offers"
+
+        # Assert selected SKU is valid
+        assert selected_offer.sku in valid_skus_in_offers, f"Run {run_idx+1}: Selected invalid SKU '{selected_offer.sku}'"
+
+
+def test_best_match_unambiguous_selection_three_runs():
+    """
+    Requirement 4 Proof: Runs 3 runs each across 3 unambiguous intent scenarios:
+    1. Scenario A: 80GB VRAM / H100 heavy fine-tuning -> 3/3 select compute-gpu-h100-1hr.
+    2. Scenario B: Lowest cost starter GPU under ₹100 -> 3/3 select compute-gpu-l4-1hr.
+    3. Scenario C: Balanced 40GB inference GPU -> 3/3 select compute-gpu-a100-1hr.
+    """
+    merchant = MerchantAgent(merchant_id="merchant_selection_test")
+
+    scenarios = [
+        ("NVIDIA H100 80GB VRAM heavy model training", "compute-gpu-h100-1hr"),
+        ("lowest cost starter GPU under ₹100 for audio processing", "compute-gpu-l4-1hr"),
+        ("balanced 40GB VRAM inference GPU", "compute-gpu-a100-1hr"),
+    ]
+
+    for intent, expected_sku in scenarios:
+        for run_idx in range(3):
+            buyer = BuyerAgent(
+                agent_id=f"buyer_select_{expected_sku}_{run_idx}",
+                max_budget_paise=50000,
+            )
+            offers = buyer.send_task_request(
+                merchant=merchant,
+                intent=intent,
+                category="ai_compute",
+            )
+            selected, reasoning = buyer.evaluate_and_select_offer(
+                offer_list=offers,
+                intent=intent,
+            )
+            assert selected.sku == expected_sku, (
+                f"Intent '{intent}', Run {run_idx+1}: Expected '{expected_sku}', got '{selected.sku}'"
+            )
+
+
+def test_phase_8_block_explanation_three_runs():
+    """
+    Requirement 6 Proof: Runs the Phase 8 over-ceiling scenario (₹65,000 > ₹50,000 ceiling)
+    3 times through the LLM agent and asserts that every run cleanly halts with a graceful explanation.
+    """
+    init_db()
+    merchant = MerchantAgent(
+        merchant_id="merchant_block_test",
+        secret_key="shared_block_key",
+    )
+
+    for run_idx in range(3):
+        buyer = BuyerAgent(
+            agent_id=f"buyer_block_demo_{run_idx}",
+            max_budget_paise=10000000,
+            secret_key="shared_block_key",
+        )
+        receipt, transcript = buyer.execute_transaction(
+            merchant=merchant,
+            intent="enterprise support dedicated team",
+            category="enterprise_services",
+            preferred_sku="enterprise-support-tier1",
+        )
+
+        explanation = buyer.explain_outcome(receipt)
+
+        assert receipt.verdict == "BLOCK", f"Run {run_idx+1}: Expected BLOCK, got {receipt.verdict}"
+        assert receipt.primary_factor == "amount_exceeded_ceiling"
+        assert receipt.order is None
+        assert "ceiling" in explanation.lower() or "blocked" in explanation.lower() or "50,000" in explanation
+

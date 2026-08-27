@@ -3,6 +3,8 @@ import type { DecisionRecord } from '../../types';
 import { VerdictBadge } from '../common/VerdictBadge';
 import { PolicyWaterfall } from '../common/PolicyWaterfall';
 import { ApirisScoreTriad } from '../common/ApirisScoreTriad';
+import { AgentTimeline } from './AgentTimeline';
+
 import {
   X,
   Copy,
@@ -252,8 +254,34 @@ export const DecisionDetailDrawer: React.FC<DecisionDetailDrawerProps> = ({
               )}
             </div>
           </div>
+
+          {/* 4. A2A Protocol Handshake Transcript */}
+          <div>
+            <h4 className="text-xs font-mono uppercase tracking-wider text-[#D4A15C] mb-2.5">
+              4. A2A Protocol Handshake Transcript
+            </h4>
+            <AgentTimeline
+              receipt={{
+                mandate_id: `mandate_${decision.id}`,
+                buyer_agent_id: decision.agent_id,
+                merchant_id: 'merchant_razorgate_cloud',
+                sku: String((decision.evidence as any)?.request?.notes?.sku || 'compute-gpu-h100-1hr'),
+                amount_paise: decision.amount_paise,
+                amount_inr: decision.amount_inr,
+                currency: 'INR',
+                verdict: decision.verdict,
+                primary_factor: decision.primary_factor,
+                summary: decision.summary,
+                confidence: decision.confidence,
+                audit_id: decision.id,
+                order: decision.razorpay_order_id ? { id: decision.razorpay_order_id } : null,
+              }}
+              explanation={decision.summary}
+            />
+          </div>
         </div>
       </div>
     </div>
   );
 };
+

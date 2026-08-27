@@ -337,9 +337,34 @@ export const LiveDashboard: React.FC<LiveDashboardProps> = ({
       {/* ZONE 4: AGENT RUN TIMELINE (A2A Multi-Agent Transcript) */}
       <div>
         <AgentTimeline
-          transcript={latestScenario?.transcript}
-          receipt={latestScenario?.receipt}
-          explanation={latestScenario?.explanation}
+          transcript={(selectedDecision?.evidence as any)?.transcript || latestScenario?.transcript}
+          receipt={
+            selectedDecision
+              ? {
+                  mandate_id: `mandate_${selectedDecision.id}`,
+                  buyer_agent_id: selectedDecision.agent_id,
+                  merchant_id: 'merchant_razorgate_cloud',
+                  sku: String(
+                    (selectedDecision.evidence as any)?.request?.notes?.sku ||
+                    (selectedDecision.amount_inr >= 50000
+                      ? 'enterprise-support-tier1'
+                      : selectedDecision.verdict === 'FLAG'
+                      ? 'api-tier-starter-100k'
+                      : 'compute-gpu-h100-1hr')
+                  ),
+                  amount_paise: selectedDecision.amount_paise,
+                  amount_inr: selectedDecision.amount_inr,
+                  currency: 'INR',
+                  verdict: selectedDecision.verdict,
+                  primary_factor: selectedDecision.primary_factor,
+                  summary: selectedDecision.summary,
+                  confidence: selectedDecision.confidence,
+                  audit_id: selectedDecision.id,
+                  order: selectedDecision.razorpay_order_id ? { id: selectedDecision.razorpay_order_id } : null,
+                }
+              : latestScenario?.receipt || null
+          }
+          explanation={selectedDecision?.summary || latestScenario?.explanation}
         />
       </div>
 
@@ -351,3 +376,4 @@ export const LiveDashboard: React.FC<LiveDashboardProps> = ({
     </div>
   );
 };
+

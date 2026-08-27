@@ -10,6 +10,8 @@ and executes gated Razorpay orders on behalf of AI buyer agents.
 import time
 from typing import Any, Dict, List, Optional
 
+import anthropic
+from backend.config import settings
 from backend.agent.catalog import DEFAULT_CATALOG, search_catalog
 from backend.agent.protocol import (
     AgentCard,
@@ -37,27 +39,51 @@ class MerchantAgent:
         merchant_name: str = "RazorGate Cloud & AI Compute Services",
         secret_key: str = "razorgate_a2a_shared_secret",
         catalog: Optional[List[Dict[str, Any]]] = None,
+        api_key: Optional[str] = None,
     ):
         self.merchant_id = merchant_id
         self.merchant_name = merchant_name
         self.secret_key = secret_key
         self.catalog = catalog if catalog is not None else DEFAULT_CATALOG
+        self.api_key = api_key or settings.api_key
 
     def get_agent_card(self) -> AgentCard:
         """
         Capability Discovery (Step 1):
         Returns the Merchant's AgentCard advertising categories, price bounds,
         and explicit gate disclosure (ALLOW/FLAG/BLOCK deterministic security contract).
+        Uses LLM framing when API key is present while keeping bounds 100% accurate.
         """
         categories = list({item["category"] for item in self.catalog})
         prices = [item["amount_paise"] for item in self.catalog]
         min_p = min(prices) if prices else 1000
         max_p = max(prices) if prices else 10000000
 
+        desc = "Enterprise AI compute, high-throughput model endpoints, and cloud infrastructure."
+
+        if self.api_key:
+            try:
+                client = anthropic.Anthropic(api_key=self.api_key)
+                prompt = (
+                    f"Merchant Name: {self.merchant_name}\n"
+                    f"Categories: {categories}\n"
+                    f"Price Range: ₹{min_p/100:.2f} - ₹{max_p/100:.2f}\n"
+                    f"Write a 1-sentence professional merchant capability disclosure description for an AgentCard in an A2A commerce protocol."
+                )
+                res = client.messages.create(
+                    model="claude-3-5-sonnet-20001022",
+                    max_tokens=100,
+                    temperature=0.2,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                desc = res.content[0].text.strip()
+            except Exception:
+                pass
+
         return AgentCard(
             merchant_id=self.merchant_id,
             merchant_name=self.merchant_name,
-            description="Enterprise AI compute, high-throughput model endpoints, and cloud infrastructure.",
+            description=desc,
             protocol_version="razorgate-a2a-v1",
             categories=categories,
             price_range_paise={"min": min_p, "max": max_p},
@@ -68,7 +94,7 @@ class MerchantAgent:
     def handle_task_request(self, request: TaskRequest) -> OfferList:
         """
         Task Request & Offer Negotiation (Steps 2 & 3):
-        Processes a structured intent & budget request and returns 2-4 candidate offers
+        Processes a structured intent & budget request and returns candidate offers
         with transparent pricing and attached gate disclosures.
         """
         matching_offers = search_catalog(
