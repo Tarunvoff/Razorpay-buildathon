@@ -14,6 +14,7 @@ import {
 } from './services/api';
 import { Header } from './components/common/Header';
 import type { SurfaceTab } from './components/common/Header';
+import { ApirisTelemetryHeader } from './components/common/ApirisTelemetryHeader';
 import { LandingPage } from './components/landing/LandingPage';
 import { LiveDashboard } from './components/dashboard/LiveDashboard';
 import { GatedFlowWalkthrough } from './components/walkthrough/GatedFlowWalkthrough';
@@ -205,8 +206,15 @@ export function App() {
 
   return (
     <div className="min-h-screen bg-[#0A0A0B] text-[#F5F1EA] flex flex-col selection:bg-[#D4A15C]/20 selection:text-[#E8B96C]">
+      {/* Item 4: Persistent Ambient Apiris Telemetry Header Ticker */}
+      <ApirisTelemetryHeader
+        latestDecision={decisions[0] || null}
+        isConnected={sseStatus === 'connected'}
+      />
+
       {/* Universal Header */}
       <Header
+
         currentTab={currentTab}
         onSelectTab={(tab) => {
           setCurrentTab(tab);

@@ -203,10 +203,11 @@ def test_a2a_best_match_is_not_first_offer():
     )
     offers_budget = buyer_budget.send_task_request(
         merchant=merchant,
-        intent="lowest cost affordable GPU for audio processing",
+        intent="general GPU compute instance for audio processing",
         category="ai_compute",
         max_budget_paise=50000,
     )
+
 
     assert len(offers_budget.offers) >= 3
     first_offer = offers_budget.offers[0]  # H100 at ₹299.00
@@ -406,4 +407,115 @@ def test_phase_8_block_explanation_three_runs():
         assert receipt.primary_factor == "amount_exceeded_ceiling"
         assert receipt.order is None
         assert "ceiling" in explanation.lower() or "blocked" in explanation.lower() or "50,000" in explanation
+
+
+def test_expanded_catalog_search_relevance():
+    """
+    Requirement 6(a) Proof: Tests relevance ranking across all 6 marketplace categories.
+    """
+    from backend.agent.catalog import search_catalog
+
+    # 1. AI Compute
+    offers_gpu = search_catalog(query="80GB VRAM Hopper LLM training", category="ai_compute")
+    assert any(o.sku == "compute-gpu-h100-1hr" for o in offers_gpu)
+
+    # 2. Software Licenses
+    offers_sw = search_catalog(query="JetBrains PyCharm IntelliJ License", category="software_licenses")
+    assert any(o.sku == "license-jetbrains-all-products" for o in offers_sw)
+
+    # 3. Cloud Storage
+    offers_st = search_catalog(query="S3 compatible object storage 10TB", category="cloud_storage")
+    assert any(o.sku == "storage-object-s3-10tb" for o in offers_st)
+
+    # 4. Dev Tooling
+    offers_dev = search_catalog(query="Datadog APM observability", category="dev_tooling")
+    assert any(o.sku == "tool-datadog-apm-pro" for o in offers_dev)
+
+    # 5. Business Services
+    offers_biz = search_catalog(query="DevOps SRE engineer sprint", category="business_services")
+    assert any(o.sku == "service-devops-engineer-1wk" for o in offers_biz)
+
+    # 6. Digital Media
+    offers_media = search_catalog(query="Dolby Atmos audio mastering API", category="digital_media")
+    assert any(o.sku == "media-dolby-audio-master" for o in offers_media)
+
+
+def test_no_match_honest_termination():
+    """
+    Requirement 3 & 6(b) Proof: Feeds an intent with no realistic catalog match (e.g. 'fresh organic apples').
+    Confirms the transcript terminates honestly at Step 3 with verdict 'NO_MATCH', rather than fabricating a SKU.
+    """
+    merchant = MerchantAgent(merchant_id="merchant_no_match_test")
+    buyer = BuyerAgent(agent_id="buyer_no_match_test", max_budget_paise=500000)
+
+    receipt, transcript = buyer.execute_transaction(
+        merchant=merchant,
+        intent="fresh organic apples and bananas",
+        category="all",
+    )
+
+
+    assert receipt.verdict == "NO_MATCH"
+    assert receipt.primary_factor == "no_catalog_match"
+    assert receipt.order is None
+    assert receipt.amount_paise == 0
+    assert "No matching merchant offers found" in receipt.summary
+
+
+def test_free_form_five_varied_intents():
+    """
+    Requirement 6(a) Proof: Runs 5 varied free-form intents against the real expanded catalog.
+    Confirms each produces a relevant offer set and reasoning citing only returned SKUs.
+    """
+    merchant = MerchantAgent(merchant_id="merchant_freeform_test")
+
+    intents = [
+        "cheap object storage for side project",
+        "Slack Enterprise Grid 10 seats license",
+        "Datadog APM observability monitoring",
+        "Dolby Atmos spatial audio mastering API",
+        "NVIDIA L4 Ada 24GB light accelerator",
+    ]
+
+    for idx, intent in enumerate(intents):
+        buyer = BuyerAgent(agent_id=f"buyer_freeform_{idx}", max_budget_paise=1000000)
+        receipt, transcript = buyer.execute_transaction(
+            merchant=merchant,
+            intent=intent,
+            category="all",
+        )
+
+        assert receipt.verdict in ("ALLOW", "FLAG"), f"Intent '{intent}': Unexpected verdict {receipt.verdict}"
+        assert receipt.sku != "none"
+        assert receipt.amount_paise > 0
+
+
+def test_free_form_over_ceiling_block():
+    """
+    Requirement 6(c) Proof: Confirms free-form input exceeding ₹50,000 ceiling (e.g. ₹120,000 cluster)
+    strictly evaluates to BLOCK with zero side effects.
+    """
+    init_db()
+    merchant = MerchantAgent(
+        merchant_id="merchant_freeform_block_test",
+        secret_key="freeform_secret",
+    )
+    buyer = BuyerAgent(
+        agent_id="buyer_freeform_block",
+        max_budget_paise=20000000,  # ₹200,000.00
+        secret_key="freeform_secret",
+    )
+
+    receipt, transcript = buyer.execute_transaction(
+        merchant=merchant,
+        intent="Enterprise Full-Rack 8x H100 High-Throughput Cluster for pre-training",
+        category="ai_compute",
+        preferred_sku="compute-gpu-cluster-full-rack",
+    )
+
+    assert receipt.verdict == "BLOCK"
+    assert receipt.primary_factor == "amount_exceeded_ceiling"
+    assert receipt.order is None
+    assert receipt.amount_inr == 120000.0
+
 

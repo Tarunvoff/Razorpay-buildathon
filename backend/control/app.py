@@ -367,6 +367,77 @@ class RunScenarioRequest(BaseModel):
     custom_budget_paise: Optional[int] = None
 
 
+class AskAgentRequest(BaseModel):
+    intent: str = Field(..., description="Free-form buyer intent typed by judge/user")
+    category: Optional[str] = Field(default="all", description="Category filter")
+    max_budget_inr: Optional[float] = Field(default=5000.0, description="Max budget ceiling in INR")
+
+
+@app.post("/agent/ask")
+@app.post("/demo/ask")
+async def ask_buyer_agent(req: AskAgentRequest):
+
+    """
+    Executes an open-ended free-form AI Buyer Agent transaction:
+    1. Runs real Claude API tool-use loop / comparative reasoning against the expanded marketplace catalog.
+    2. Executes real 6-step A2A protocol handshake.
+    3. Evaluates through RazorGate deterministic security gate.
+    4. If verdict is ALLOW, creates real Razorpay order.
+    5. Returns full transcript, receipt, explanation, and decision audit record.
+    """
+    import time
+    from backend.agent.buyer_agent import BuyerAgent
+    from backend.agent.merchant_agent import MerchantAgent
+
+    timestamp_suffix = int(time.time() * 1000) % 100000
+    merchant = MerchantAgent(
+        merchant_id="merchant_razorgate_cloud",
+        merchant_name="RazorGate Cloud & AI Compute Services",
+        secret_key="razorgate_demo_secret",
+    )
+
+    budget_paise = int((req.max_budget_inr or 5000.0) * 100)
+    buyer = BuyerAgent(
+        agent_id=f"buyer_custom_{timestamp_suffix}",
+        max_budget_paise=budget_paise,
+        secret_key="razorgate_demo_secret",
+    )
+
+    receipt, transcript = buyer.execute_transaction(
+        merchant=merchant,
+        intent=req.intent,
+        category=req.category or "all",
+        max_budget_paise=budget_paise,
+    )
+
+    explanation = buyer.explain_outcome(receipt)
+
+    # Broadcast event to SSE subscribers
+    await broadcast_decision_event({
+        "type": "decision",
+        "audit_id": receipt.audit_id,
+        "agent_id": buyer.agent_id,
+        "verdict": receipt.verdict,
+        "amount_paise": receipt.amount_paise,
+        "amount_inr": receipt.amount_inr,
+        "primary_factor": receipt.primary_factor,
+        "summary": receipt.summary,
+        "confidence": receipt.confidence,
+        "allow_token": receipt.evidence.get("allow_token") if receipt.evidence else None,
+        "razorpay_order_id": receipt.order.get("id") if receipt.order else None,
+    })
+
+    return {
+        "scenario": "custom_freeform",
+        "intent": req.intent,
+        "receipt": receipt,
+        "transcript": transcript,
+        "explanation": explanation,
+        "key_id": settings.razorpay_key_id,
+    }
+
+
+
 @app.post("/demo/run-scenario")
 async def run_scenario(req: RunScenarioRequest):
     """

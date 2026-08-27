@@ -135,6 +135,7 @@ export interface ScenarioRunResult {
   amount_inr: number;
   audit_id?: number;
   order?: Record<string, unknown> | null;
+  key_id?: string;
 }
 
 export interface MetricsSummary {

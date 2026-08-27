@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import type { ScenarioRunResult, Verdict, VerifyOrderResponse } from '../../types';
-import { checkGate, createOrder, verifyOrder, loadRazorpayScript } from '../../services/api';
+import { checkGate, createOrder, verifyOrder, loadRazorpayScript, askBuyerAgent } from '../../services/api';
 import { VerdictBadge } from '../common/VerdictBadge';
 import {
   Play,
@@ -26,7 +26,7 @@ interface GatedFlowWalkthroughProps {
   currentScenarioResult: ScenarioRunResult | null;
 }
 
-type ScenarioType = 'clean_allow' | 'behavior_flag' | 'forced_failure_block';
+type ScenarioType = 'clean_allow' | 'behavior_flag' | 'forced_failure_block' | 'custom';
 
 export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
   onRunScenario,
@@ -46,6 +46,14 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
   const [verificationError, setVerificationError] = useState<string | null>(null);
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
   const [burstCount, setBurstCount] = useState<number>(0);
+
+  // Item 2 & 5: Free-form intent execution state & per-session rate limit
+  const [customIntent, setCustomIntent] = useState<string>('cheap object storage for side project');
+  const [customBudgetInr, setCustomBudgetInr] = useState<number>(5000);
+  const [runsLeft, setRunsLeft] = useState<number>(10);
+  const [customScenarioResult, setCustomScenarioResult] = useState<ScenarioRunResult | null>(null);
+
+
 
   // 30s token countdown timer
   useEffect(() => {
@@ -176,8 +184,10 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
 
       setRealGateResult(gateRes);
 
-      // Trigger full backend scenario run in parallel to update transcript & DB
-      onRunScenario(scenario).catch(() => {});
+      if (scenario !== 'custom') {
+        onRunScenario(scenario as any).catch(() => {});
+      }
+
 
       // Stage 3: Token Minting or Block Verdict
       setCurrentStep(3);
@@ -257,6 +267,14 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
       sku: 'enterprise-support-tier1',
       summary: 'Enterprise 24/7 dedicated support exceeds ₹50,000 ceiling. Deterministically blocked, 0 orders created, graceful explanation.',
     },
+    custom: {
+      title: `Free-Form Intent: "${customIntent}"`,
+      badge: 'Custom Judge Intent',
+      verdict: (realGateResult?.verdict || customScenarioResult?.verdict || 'ALLOW') as Verdict,
+      amount: `₹${((customScenarioResult?.amount_inr || (realGateResult?.amount_paise ? realGateResult.amount_paise / 100 : customBudgetInr))).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`,
+      sku: String(customScenarioResult?.receipt?.sku || 'custom_request'),
+      summary: customScenarioResult?.explanation || realGateResult?.summary || `Evaluates free-form intent '${customIntent}' against real marketplace catalog and RazorGate security gate.`,
+    },
   };
 
   const currentMeta = scenarioMeta[selectedScenario];
@@ -277,6 +295,81 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
     }
   };
 
+  const handleFreeFormSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!customIntent.trim() || runsLeft <= 0 || isScenarioRunning || isExecuting) return;
+
+    setRunsLeft((prev) => Math.max(0, prev - 1));
+    setSelectedScenario('custom');
+    setCurrentStep(1);
+    setRealGateResult(null);
+    setRealOrderResult(null);
+    setVerifiedPayment(null);
+    setVerificationError(null);
+    setCustomScenarioResult(null);
+    setIsExecuting(true);
+
+    try {
+      // Stage 1: Buyer signs mandate
+      setCurrentStep(1);
+      await new Promise((r) => setTimeout(r, 300));
+
+      const res = await askBuyerAgent(customIntent, 'all', customBudgetInr);
+      setCustomScenarioResult(res);
+
+      // Stage 2: Gate Check
+      setCurrentStep(2);
+      await new Promise((r) => setTimeout(r, 400));
+
+      const receipt = res.receipt;
+      setRealGateResult({
+        verdict: receipt.verdict,
+        confidence: receipt.confidence,
+        primary_factor: receipt.primary_factor,
+        summary: receipt.summary,
+        allow_token: receipt.evidence?.allow_token,
+        audit_id: receipt.audit_id,
+        amount_paise: receipt.amount_paise,
+      });
+
+      // Stage 3: Token Minting / Verdict
+      setCurrentStep(3);
+      await new Promise((r) => setTimeout(r, 400));
+
+      if (receipt.verdict === 'ALLOW' && receipt.order) {
+        const orderRes = {
+          status: 'created',
+          order: receipt.order,
+          audit_id: receipt.audit_id,
+          key_id: res.key_id || 'rzp_test_TUiS6dViGS4SZY',
+        };
+        setRealOrderResult(orderRes);
+
+        // Stage 4: Order Creation
+        setCurrentStep(4);
+        await new Promise((r) => setTimeout(r, 400));
+
+        // Stage 5: Dual Proof Panel
+        setCurrentStep(5);
+        await new Promise((r) => setTimeout(r, 200));
+
+        // Auto-launch Razorpay Checkout test-mode modal for ALLOW transactions!
+        triggerRazorpayModal(orderRes, receipt.audit_id || undefined, receipt.amount_paise || Math.round(customBudgetInr * 100));
+
+      } else {
+        setCurrentStep(5);
+      }
+
+    } catch (err: any) {
+      console.error('Free-form agent execution error:', err);
+      setCurrentStep(5);
+    } finally {
+      setIsExecuting(false);
+    }
+  };
+
+
+
   return (
     <div className="space-y-8 pb-16">
       {/* SECTION HEADER */}
@@ -292,6 +385,67 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
           Visually prove "no self-reported authorization": watch real XHR fetch calls hit <code className="text-[#D4A15C]">POST /gate/check</code> and <code className="text-[#D4A15C]">POST /orders</code>, launch Razorpay's actual payment modal, and verify server-side HMAC signatures.
         </p>
       </div>
+
+      {/* ITEM 2: FREE-FORM "ASK THE BUYER AGENT" INTERACTIVE INPUT CARD */}
+      <div className="max-w-5xl mx-auto bg-[#161619] border border-[#D4A15C]/40 rounded-2xl p-5 shadow-2xl space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/10">
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 rounded-lg bg-[#D4A15C]/20 border border-[#D4A15C]/40 text-[#D4A15C]">
+              <Sparkles size={16} />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-[#F5F1EA]">
+                Ask the Buyer Agent (Free-Form Intent & Multi-Category Marketplace Search)
+              </h3>
+              <p className="text-xs text-[#8E8A83]">
+                Type any custom purchase intent to watch the real Claude-driven Buyer Agent search 23+ catalog SKUs across 6 categories.
+              </p>
+            </div>
+          </div>
+          <div className="text-[11px] font-mono px-2.5 py-1 rounded bg-white/5 border border-white/10 text-[#E8B96C] shrink-0">
+            Per-Session Guardrail: <span className="font-bold text-white">{runsLeft} / 10 runs remaining</span>
+          </div>
+        </div>
+
+        <form onSubmit={handleFreeFormSubmit} className="grid grid-cols-1 md:grid-cols-12 gap-3">
+          <div className="md:col-span-6">
+            <label className="block text-[11px] font-mono text-[#8E8A83] mb-1">
+              Purchase Intent / Custom Judge Request
+            </label>
+            <input
+              type="text"
+              value={customIntent}
+              onChange={(e) => setCustomIntent(e.target.value)}
+              placeholder="e.g. cheap object storage for side project, 10TB cloud backup, or enterprise devops team"
+              className="w-full bg-black/50 border border-white/15 rounded-lg px-3 py-2 text-xs text-[#F5F1EA] placeholder-[#8E8A83]/60 focus:outline-none focus:border-[#D4A15C] font-sans"
+            />
+          </div>
+
+          <div className="md:col-span-3">
+            <label className="block text-[11px] font-mono text-[#8E8A83] mb-1">
+              Max Budget (₹ INR)
+            </label>
+            <input
+              type="number"
+              value={customBudgetInr}
+              onChange={(e) => setCustomBudgetInr(Number(e.target.value))}
+              className="w-full bg-black/50 border border-white/15 rounded-lg px-3 py-2 text-xs text-[#F5F1EA] focus:outline-none focus:border-[#D4A15C] font-mono"
+            />
+          </div>
+
+          <div className="md:col-span-3 flex items-end">
+            <button
+              type="submit"
+              disabled={isScenarioRunning || isExecuting || runsLeft <= 0 || !customIntent.trim()}
+              className="w-full py-2 px-4 rounded-lg bg-[#D4A15C] hover:bg-[#E8B96C] disabled:bg-white/10 text-black font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-lg font-mono"
+            >
+              <Play size={13} />
+              <span>Ask Buyer Agent</span>
+            </button>
+          </div>
+        </form>
+      </div>
+
 
       {/* SCENARIO SELECTOR TABS */}
       <div className="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-4">

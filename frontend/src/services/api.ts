@@ -293,6 +293,23 @@ export async function verifyOrder(payload: VerifyOrderPayload): Promise<VerifyOr
   return res.json();
 }
 
+export async function askBuyerAgent(
+  intent: string,
+  category = 'all',
+  maxBudgetInr = 5000.0
+): Promise<ScenarioRunResult> {
+  const res = await fetch(`${API_BASE}/agent/ask`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ intent, category, max_budget_inr: maxBudgetInr }),
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Free-form Agent execution failed: ${errText}`);
+  }
+  return res.json();
+}
+
 export function loadRazorpayScript(): Promise<boolean> {
   return new Promise((resolve) => {
     if (window.Razorpay) {
@@ -306,4 +323,5 @@ export function loadRazorpayScript(): Promise<boolean> {
     document.body.appendChild(script);
   });
 }
+
 

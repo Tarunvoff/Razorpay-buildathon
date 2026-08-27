@@ -146,7 +146,7 @@ class BuyerAgent:
         intent: Optional[str] = None,
         strategy: str = "intent_match",
         preferred_sku: Optional[str] = None,
-    ) -> Tuple[Offer, str]:
+    ) -> Tuple[Optional[Offer], str]:
         """
         Step 3: Offer Evaluation and Dynamic Comparative Reasoning.
         Uses Claude API when available (temperature=0.2), or structured fallback.
@@ -155,7 +155,10 @@ class BuyerAgent:
         """
         offers = offer_list.offers
         if not offers:
-            raise ValueError("No offers available to evaluate.")
+            reasoning = f"No matching merchant offers found for intent '{intent or 'request'}' in the catalog."
+            self.log_step("selection_reasoning", {"selected_sku": None, "reasoning": reasoning})
+            return None, reasoning
+
 
         # Try Real Claude API Tool / Completion call if API key present
         if self.api_key:
@@ -332,6 +335,27 @@ class BuyerAgent:
             preferred_sku=preferred_sku,
         )
 
+        if selected_offer is None:
+            no_match_receipt = Receipt(
+                mandate_id=f"mandate_no_match_{int(time.time())}",
+                buyer_agent_id=self.agent_id,
+                merchant_id=merchant.merchant_id,
+                sku="none",
+                amount_paise=0,
+                amount_inr=0.0,
+                currency="INR",
+                verdict="NO_MATCH",
+                primary_factor="no_catalog_match",
+                summary=f"No matching merchant offers found for intent '{intent}' in the marketplace catalog.",
+                confidence=1.0,
+                audit_id=None,
+                order=None,
+                evidence={"intent": intent, "category": category},
+                timestamp=time.time(),
+            )
+            self.log_step("receipt", no_match_receipt)
+            return no_match_receipt, self.conversation_transcript
+
         # 4. Issue Signed Mandate
         mandate = self.issue_mandate(
             selected_offer=selected_offer,
@@ -344,6 +368,7 @@ class BuyerAgent:
         self.log_step("receipt", receipt)
 
         return receipt, self.conversation_transcript
+
 
     def explain_outcome(self, receipt: Receipt) -> str:
         """
