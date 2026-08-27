@@ -280,3 +280,33 @@ class BuyerAgent:
         self.log_step("receipt", receipt)
 
         return receipt, self.conversation_transcript
+
+    def explain_outcome(self, receipt: Receipt) -> str:
+        """
+        Translates the structured protocol Receipt into a clear, natural-language,
+        user-facing explanation of the outcome.
+        """
+        if receipt.verdict == "ALLOW":
+            order_id = receipt.order.get("id", "created") if receipt.order else "order_created"
+            return (
+                f"Successfully authorized and placed order for '{receipt.sku}' at ₹{receipt.amount_inr:,.2f}. "
+                f"Razorpay Order ID: {order_id} (Audit Decision #{receipt.audit_id})."
+            )
+        elif receipt.verdict == "BLOCK" and receipt.primary_factor == "amount_exceeded_ceiling":
+            return (
+                f"I found a matching option ('{receipt.sku}' at ₹{receipt.amount_inr:,.2f}), "
+                f"but RazorGate's deterministic security gate blocked the transaction because the amount exceeds the ₹50,000.00 policy ceiling. "
+                f"I stopped execution safely — no payment was made and no Razorpay order was created (Audit Decision #{receipt.audit_id})."
+            )
+        elif receipt.verdict == "BLOCK":
+            return (
+                f"Transaction for '{receipt.sku}' at ₹{receipt.amount_inr:,.2f} was blocked by RazorGate security policy "
+                f"({receipt.primary_factor}: {receipt.summary}). No payment was processed."
+            )
+        elif receipt.verdict == "FLAG":
+            return (
+                f"Transaction for '{receipt.sku}' at ₹{receipt.amount_inr:,.2f} was flagged for behavioral anomaly "
+                f"({receipt.primary_factor}). Awaiting human confirmation before retrying."
+            )
+        return receipt.summary
+
