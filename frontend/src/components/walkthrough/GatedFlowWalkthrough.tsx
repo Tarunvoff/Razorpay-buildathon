@@ -45,6 +45,7 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
   const [isVerifying, setIsVerifying] = useState<boolean>(false);
   const [verificationError, setVerificationError] = useState<string | null>(null);
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
+  const [burstCount, setBurstCount] = useState<number>(0);
 
   // 30s token countdown timer
   useEffect(() => {
@@ -123,6 +124,7 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
     setVerifiedPayment(null);
     setVerificationError(null);
     setIsExecuting(true);
+    setBurstCount(0);
 
     const timestamp = Date.now();
     let agentId = 'buyer_h100_cluster_' + (timestamp % 10000);
@@ -130,7 +132,7 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
     let category = 'ai_compute';
 
     if (scenario === 'behavior_flag') {
-      agentId = 'buyer_burst_dev_' + (timestamp % 10000);
+      agentId = 'demo_flag_burst_agent';
       amount = 4900;
       category = 'api_credits';
     } else if (scenario === 'forced_failure_block') {
@@ -142,17 +144,36 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
     try {
       // Stage 1: Buyer signs mandate
       setCurrentStep(1);
-      await new Promise((r) => setTimeout(r, 300));
+      await new Promise((r) => setTimeout(r, 200));
 
       // Stage 2: Gate waterfall evaluation via real POST /gate/check
       setCurrentStep(2);
-      const gateRes = await checkGate({
-        amount: amount,
-        currency: 'INR',
-        agent_id: agentId,
-        receipt: `rcpt_${timestamp}`,
-        category: category,
-      });
+
+      let gateRes: any = null;
+      if (scenario === 'behavior_flag') {
+        // Requirement 2 & 5: Fire 6 rapid burst calls with fixed agent_id to trigger rolling window FLAG
+        for (let i = 1; i <= 6; i++) {
+          setBurstCount(i);
+          gateRes = await checkGate({
+            amount: amount,
+            currency: 'INR',
+            agent_id: agentId,
+            receipt: `rcpt_burst_${timestamp}_${i}`,
+            category: category,
+          });
+          await new Promise((r) => setTimeout(r, 120));
+        }
+      } else {
+        setBurstCount(1);
+        gateRes = await checkGate({
+          amount: amount,
+          currency: 'INR',
+          agent_id: agentId,
+          receipt: `rcpt_${timestamp}`,
+          category: category,
+        });
+      }
+
       setRealGateResult(gateRes);
 
       // Trigger full backend scenario run in parallel to update transcript & DB
@@ -186,8 +207,10 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
         setCurrentStep(5);
         setIsExecuting(false);
 
-        // Automatically launch Razorpay Modal for user test payment
-        triggerRazorpayModal(orderRes, gateRes.audit_id, amount);
+        // For clean ALLOW, auto-launch Razorpay Modal for user test payment
+        if (scenario === 'clean_allow') {
+          triggerRazorpayModal(orderRes, gateRes.audit_id, amount);
+        }
       } else {
         setCurrentStep(5);
         setIsExecuting(false);
@@ -220,11 +243,11 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
     },
     behavior_flag: {
       title: 'Scenario 2: Behavioral Anomaly FLAG',
-      badge: 'Asymmetric Flag',
+      badge: '6-Call Rapid Burst',
       verdict: 'FLAG',
       amount: '₹49.00',
       sku: 'api-tier-starter-100k',
-      summary: 'API Token refill triggered by 6 rapid burst calls in rolling window. Safely flagged without blocking, creates verified order.',
+      summary: 'Fires 6 rapid calls in rolling window (fixed agent ID). Exceeds 5-call threshold, reliably triggering FLAG verdict every time.',
     },
     forced_failure_block: {
       title: 'Scenario 3: Phase 8 Forced-Failure BLOCK',
@@ -239,6 +262,7 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
   const currentMeta = scenarioMeta[selectedScenario];
   const activeVerdict = realGateResult?.verdict || currentScenarioResult?.verdict || currentMeta.verdict;
   const isBlock = activeVerdict === 'BLOCK';
+  const isFlag = activeVerdict === 'FLAG';
   const isAllow = activeVerdict === 'ALLOW';
 
   const orderId =
@@ -381,7 +405,9 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
               <span>POST /gate/check</span>
             </div>
             <div className="text-[11px] font-mono text-[#8E8A83] mt-1">
-              Live FastAPI Waterfall
+              {selectedScenario === 'behavior_flag' && burstCount > 0
+                ? `Burst ${burstCount}/6 ${burstCount === 6 ? '(FLAG!)' : ''}`
+                : 'Live FastAPI Waterfall'}
             </div>
           </div>
 
@@ -391,16 +417,18 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
               currentStep >= 3
                 ? isBlock
                   ? 'bg-rose-950/40 border-rose-500/50 text-rose-300'
+                  : isFlag
+                  ? 'bg-amber-950/40 border-amber-500/50 text-amber-300'
                   : 'bg-emerald-950/40 border-emerald-500/50 text-emerald-300'
                 : 'bg-black/20 border-white/5 opacity-40'
             }`}
           >
             <div className="text-[10px] font-mono uppercase mb-1">
-              {isBlock ? 'Stage 3: Halted' : 'Stage 3: Token'}
+              {isBlock ? 'Stage 3: Halted' : isFlag ? 'Stage 3: Flagged' : 'Stage 3: Token'}
             </div>
             <div className="text-xs font-semibold flex items-center gap-1.5">
-              {isBlock ? <AlertOctagon size={13} /> : <Clock size={13} />}
-              <span>{isBlock ? 'BLOCK Verdict' : 'HMAC ALLOW Token'}</span>
+              {isBlock ? <AlertOctagon size={13} /> : isFlag ? <AlertTriangle size={13} /> : <Clock size={13} />}
+              <span>{isBlock ? 'BLOCK Verdict' : isFlag ? 'FLAG Verdict' : 'HMAC ALLOW Token'}</span>
             </div>
             <div className="text-[11px] font-mono mt-1 opacity-80">
               {isBlock ? 'Zero token minted' : `30s TTL (${tokenCountdown}s remaining)`}
@@ -419,7 +447,7 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
           >
             <div className="text-[10px] font-mono text-[#D4A15C] uppercase mb-1">Stage 4</div>
             <div className="text-xs font-semibold flex items-center gap-1.5">
-              <Server size={13} className={isBlock ? 'text-rose-400' : 'text-emerald-400'} />
+              <Server size={13} className={isBlock ? 'text-rose-400' : isFlag ? 'text-amber-400' : 'text-emerald-400'} />
               <span>POST /orders</span>
             </div>
             <div className="text-[11px] font-mono text-[#8E8A83] mt-1">
@@ -481,6 +509,24 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
             ) : (
               /* CLEAN / FLAG SUCCESS DUAL RECORD PROOF */
               <div className="space-y-4">
+                {/* FLAG Banner if verdict is FLAG */}
+                {isFlag && (
+                  <div className="p-4 rounded-xl bg-amber-950/40 border border-amber-500/50 space-y-2 font-mono text-xs text-amber-200">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 font-bold text-amber-400 text-sm">
+                        <AlertTriangle size={16} />
+                        <span>Scenario 2 Verdict: FLAG (Behavioral Anomaly Triggered)</span>
+                      </div>
+                      <span className="bg-amber-900/80 text-amber-200 px-2.5 py-0.5 rounded text-[10px] font-bold border border-amber-400/40">
+                        6 CALL BURST PROVEN
+                      </span>
+                    </div>
+                    <p className="text-amber-100/90 text-xs font-sans leading-relaxed">
+                      Fixed agent <code className="text-amber-300 font-mono">demo_flag_burst_agent</code> executed 6 rapid payment calls within the 300s window. Calls 1–5 returned ALLOW; call 6 breached the threshold limit (5), returning a deterministic <strong>FLAG</strong> verdict with primary factor <code className="text-amber-300 font-mono">behavior_anomaly</code>.
+                    </p>
+                  </div>
+                )}
+
                 {/* Razorpay Interactive Modal Trigger Bar */}
                 <div className="p-4 rounded-xl bg-[#161619] border border-[#D4A15C]/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-2 text-xs font-mono">
@@ -548,7 +594,7 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
                     <div className="space-y-1.5">
                       <div className="flex justify-between">
                         <span className="text-[#8E8A83]">Verdict:</span>
-                        <span className={isAllow ? 'text-emerald-400 font-bold' : 'text-amber-400 font-bold'}>
+                        <span className={isAllow ? 'text-emerald-400 font-bold' : isFlag ? 'text-amber-400 font-bold' : 'text-rose-400 font-bold'}>
                           {activeVerdict}
                         </span>
                       </div>

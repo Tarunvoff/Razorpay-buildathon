@@ -683,3 +683,46 @@ def test_verify_order_valid_signature_success():
         assert data["razorpay_payment_id"] == payment_id
         assert data["razorpay_order_id"] == order_id
 
+
+def test_scenario_2_reproducibility_five_runs():
+    """
+    Requirement 6 Proof: Confirms Scenario 2 (Behavioral Anomaly FLAG) reliably
+    produces FLAG across 5 consecutive runs when 6 rapid calls are made with a fixed agent_id.
+    """
+    from backend.gate.behavior import behavior_analyzer
+
+    client = TestClient(app)
+    agent_id = "demo_flag_burst_agent"
+
+    for run_idx in range(5):
+        # Evict prior window history before starting sequence
+        behavior_analyzer.store.evict(agent_id, time.time() + 1000)
+
+
+        results = []
+        for call_i in range(6):
+            res = client.post(
+                "/gate/check",
+                json={
+                    "amount": 4900,
+                    "currency": "INR",
+                    "agent_id": agent_id,
+                    "receipt": f"rcpt_burst_{run_idx}_{call_i}",
+                    "action": "create_order",
+                },
+            )
+            assert res.status_code == 200
+            results.append(res.json())
+
+        # Calls 1..5 must be ALLOW
+        for i in range(5):
+            assert results[i]["verdict"] == "ALLOW", f"Run {run_idx+1}: Call {i+1} expected ALLOW, got {results[i]['verdict']}"
+
+        # Call 6 MUST be FLAG
+        final_call = results[5]
+        assert final_call["verdict"] == "FLAG", f"Run {run_idx+1}: Call 6 expected FLAG, got {final_call['verdict']}. Full payload: {final_call}"
+        assert final_call["primary_factor"] == "behavior_anomaly"
+
+
+
+

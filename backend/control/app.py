@@ -399,18 +399,19 @@ async def run_scenario(req: RunScenarioRequest):
             preferred_sku="enterprise-support-tier1",
         )
     elif req.scenario == "behavior_flag":
-        agent_id = f"buyer_burst_dev_{timestamp_suffix}"
-        # Seed 6 rapid burst calls in rolling window to trigger frequency flag
-        for _ in range(6):
-            behavior_analyzer.store.append(
-                agent_id,
-                {"amount_paise": 4900, "amount_inr": 49.0, "timestamp": time.time() - 10},
-            )
+        agent_id = "demo_flag_burst_agent"
+        # Evict prior window history for clean burst evaluation
+        behavior_analyzer.store.evict(agent_id, time.time() + 1000)
+        # Seed 5 rapid burst calls in rolling window
+        now = time.time()
+        for i in range(5):
+            behavior_analyzer.store.append(agent_id, now - (30 - i * 2), 4900)
         buyer = BuyerAgent(
             agent_id=agent_id,
             max_budget_paise=req.custom_budget_paise or 500000,
             secret_key="razorgate_demo_secret",
         )
+
         receipt, transcript = buyer.execute_transaction(
             merchant=merchant,
             intent="Rapid API token quota refill for live automated batch evaluation",

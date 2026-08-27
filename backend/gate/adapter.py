@@ -209,13 +209,14 @@ def check(payment_call: dict) -> GateResult:
     agent_id = payment_call.get("agent_id") or payment_call.get("session_id") or "default_agent"
     amount_paise = payment_call.get("amount", 0)
 
-    if "mock_behavior_signal" in payment_call:
+    if payment_call.get("mock_behavior_signal") is not None:
         behavior_signal = payment_call["mock_behavior_signal"]
     else:
         behavior_signal = behavior_analyzer.record_and_evaluate(
             agent_id=agent_id,
             amount_paise=amount_paise,
         )
+
 
     # 3. Evaluate combined payments-native policy rules
     policy_decision: PolicyDecision = evaluate_policy(
