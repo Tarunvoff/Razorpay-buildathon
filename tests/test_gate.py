@@ -620,3 +620,66 @@ def test_created_order_is_retrievable_from_razorpay():
             fetched = razorpay_client.fetch_order(created["id"])
             assert fetched["id"] == expected_order_id
             assert fetched["amount"] == amount_paise
+
+
+def test_verify_order_tampered_signature_rejection():
+    """
+    Requirement 3 Proof: Confirms that POST /orders/verify independently recomputes
+    the HMAC-SHA256 signature and rejects any tampered or forged signature with HTTP 400 Bad Request.
+    """
+    client = TestClient(app)
+
+    payload = {
+        "razorpay_order_id": "order_test_123456",
+        "razorpay_payment_id": "pay_test_987654",
+        "razorpay_signature": "tampered_bogus_hmac_signature_00000000000000000000000000000000",
+        "audit_id": 9999,
+    }
+
+    response = client.post("/orders/verify", json=payload)
+    assert response.status_code == 400, f"Expected HTTP 400 for tampered signature, got {response.status_code}"
+    data = response.json()
+    assert "detail" in data
+    assert "Invalid Razorpay payment signature" in data["detail"]
+
+
+def test_verify_order_valid_signature_success():
+    """
+    Confirms that POST /orders/verify succeeds when passed a valid HMAC signature
+    computed using the server's key secret over (order_id + "|" + payment_id).
+    """
+    import hashlib
+    import hmac
+
+    client = TestClient(app)
+
+    order_id = "order_valid_12345"
+    payment_id = "pay_valid_67890"
+    secret = (settings.razorpay_key_secret or "razorgate_default_signing_secret").encode("utf-8")
+    msg = f"{order_id}|{payment_id}".encode("utf-8")
+    valid_signature = hmac.new(secret, msg, hashlib.sha256).hexdigest()
+
+    payload = {
+        "razorpay_order_id": order_id,
+        "razorpay_payment_id": payment_id,
+        "razorpay_signature": valid_signature,
+        "audit_id": 1001,
+    }
+
+    mock_order = {
+        "id": order_id,
+        "entity": "order",
+        "amount": 29900,
+        "currency": "INR",
+        "status": "paid",
+    }
+
+    with patch.object(razorpay_client, "fetch_order", return_value=mock_order):
+        response = client.post("/orders/verify", json=payload)
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
+        data = response.json()
+        assert data["status"] == "verified"
+        assert data["verified"] is True
+        assert data["razorpay_payment_id"] == payment_id
+        assert data["razorpay_order_id"] == order_id
+

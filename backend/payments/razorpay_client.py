@@ -125,3 +125,27 @@ def create_gated_order(
 def fetch_order(order_id: str) -> Dict[str, Any]:
     """Fetches order details by order_id from Razorpay."""
     return client.order.fetch(order_id)
+
+
+def verify_payment_signature(
+    razorpay_order_id: str,
+    razorpay_payment_id: str,
+    razorpay_signature: str,
+) -> bool:
+    """
+    Verifies Razorpay payment signature server-side using Razorpay Key Secret.
+    Signature formula: HMAC-SHA256(order_id + "|" + payment_id, key_secret)
+    """
+    secret = settings.razorpay_key_secret or ""
+    try:
+        client.utility.verify_payment_signature({
+            "razorpay_order_id": razorpay_order_id,
+            "razorpay_payment_id": razorpay_payment_id,
+            "razorpay_signature": razorpay_signature,
+        })
+        return True
+    except Exception:
+        msg = f"{razorpay_order_id}|{razorpay_payment_id}".encode("utf-8")
+        expected = hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(expected, razorpay_signature)
+
