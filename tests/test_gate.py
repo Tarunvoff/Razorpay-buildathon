@@ -1,12 +1,21 @@
+import os
 import time
 from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
-from backend.audit.db import get_recent_decisions, init_db, record_decision
+from backend.audit.db import (
+    get_decision_by_id,
+    get_recent_decisions,
+    init_db,
+    link_order_to_decision,
+    record_decision,
+)
 from backend.audit.explainer import build_explanation
+from backend.config import settings
 from backend.control.app import app
 from backend.gate import adapter
 from backend.gate.behavior import BehaviorAnalyzer, InMemoryWindowStore
+from backend.payments import razorpay_client
 
 
 def test_normal_call_evaluates_non_blocking_apiris_action():
@@ -25,7 +34,6 @@ def test_normal_call_evaluates_non_blocking_apiris_action():
         "timing_ms": 120.0,
     }
 
-    # 1. Direct Apiris evaluation check
     raw_eval = adapter.score_payment_call(clean_call)
     decision = raw_eval.get("decision", {})
     scores = decision.get("scores", {})
@@ -35,7 +43,6 @@ def test_normal_call_evaluates_non_blocking_apiris_action():
     assert scores.get("A_score", 0.0) >= 0.5, f"A_score too low: {scores.get('A_score')}"
     assert scores.get("D_score", 0.0) >= 0.5, f"D_score too low: {scores.get('D_score')}"
 
-    # 2. Gate check wrapper verification (verifies raw action & no signal field)
     gate_result = adapter.check(clean_call)
     assert gate_result["verdict"] == "ALLOW"
     assert "signal" not in gate_result["apiris_score"], "Removed 'signal' field must not be present"
@@ -107,20 +114,17 @@ def test_behavior_burst_flags_while_isolated_call_does_not():
     Phase 3 Exit Criterion (High Frequency):
     Fires a burst of rapid calls (exceeding frequency_threshold=5) for 'burst_agent'
     within the window and asserts it flags with 'high_frequency' in reasons.
-    In the same test, runs a single isolated call for 'isolated_agent' and asserts
-    it does not flag.
     """
     store = InMemoryWindowStore()
     analyzer = BehaviorAnalyzer(window_seconds=300.0, frequency_threshold=5, store=store)
 
-    # 1. Burst of 6 calls for 'burst_agent' (threshold is 5)
     burst_results = []
     base_time = time.time()
     for i in range(6):
         res = analyzer.record_and_evaluate(
             agent_id="burst_agent",
             amount_paise=10000,
-            timestamp=base_time + i * 2,  # 2 seconds apart
+            timestamp=base_time + i * 2,
         )
         burst_results.append(res)
 
@@ -129,7 +133,6 @@ def test_behavior_burst_flags_while_isolated_call_does_not():
     assert "high_frequency" in last_burst_result["reasons"], f"Expected 'high_frequency' in reasons, got {last_burst_result['reasons']}"
     assert last_burst_result["session_call_count"] == 6
 
-    # 2. Single isolated call for 'isolated_agent' in the same window
     isolated_result = analyzer.record_and_evaluate(
         agent_id="isolated_agent",
         amount_paise=10000,
@@ -143,7 +146,7 @@ def test_behavior_burst_flags_while_isolated_call_does_not():
 def test_behavior_amount_deviation_flags_outlier():
     """
     Item 1 Verification (Amount Deviation):
-    Same agent_id, several calls at a stable baseline amount (e.g. ₹100 / 10,000 paise),
+    Same agent_id, several calls at a stable baseline amount (₹100 / 10,000 paise),
     then one call at a significantly different outlier amount (₹5,000 / 500,000 paise)
     with total calls under frequency threshold (N=4 <= 5), asserting 'amount_deviation' flags.
     """
@@ -152,7 +155,6 @@ def test_behavior_amount_deviation_flags_outlier():
     base_time = time.time()
     agent_id = "agent_spending_drift"
 
-    # 1. Establish stable baseline with 3 calls of ₹100 (10,000 paise)
     for i in range(3):
         res = analyzer.record_and_evaluate(
             agent_id=agent_id,
@@ -161,7 +163,6 @@ def test_behavior_amount_deviation_flags_outlier():
         )
         assert res["flag"] is False, f"Baseline call {i+1} should not flag"
 
-    # 2. Outlier call: sudden ₹5,000 (500,000 paise) purchase on 4th call
     outlier_res = analyzer.record_and_evaluate(
         agent_id=agent_id,
         amount_paise=500000,
@@ -203,7 +204,7 @@ def test_clean_under_ceiling_call_produces_allow():
     """
     Phase 4 Test 2:
     Proves that a normal, clean, under-ceiling call evaluates to ALLOW
-    with high confidence and primary_factor 'policy_cleared'.
+    with high confidence and primary_factor 'policy_cleared', and mints an allow_token.
     """
     clean_call = {
         "amount": 50000,  # 500 INR < 50,000 INR ceiling
@@ -220,6 +221,7 @@ def test_clean_under_ceiling_call_produces_allow():
     assert result["decision"]["primary_factor"] == "policy_cleared"
     assert result["confidence"] == 1.0, "Clean call with zero risk weight should have confidence 1.0"
     assert result["decision"]["amount_inr"] == 500.0
+    assert result["allow_token"] is not None, "ALLOW verdict must mint a server-issued allow_token"
 
 
 def test_behavior_flag_with_clean_apiris_produces_flag_never_block():
@@ -276,6 +278,30 @@ def test_apiris_high_risk_produces_block():
     assert result["decision"]["primary_factor"] == "apiris_high_risk"
 
 
+def test_flag_confidence_boundary_scaling():
+    """
+    Item 2 Verification:
+    Asserts that a barely-flagged call (risk_weight=0.42 near flag threshold 0.40)
+    produces a lower confidence score than a clearly-flagged call (risk_weight=0.75 near block threshold 0.80).
+    """
+    from backend.gate.policy import evaluate_policy
+
+    barely_flagged_score = {"risk_weight": 0.42, "confidence": 1.0}
+    clearly_flagged_score = {"risk_weight": 0.75, "confidence": 1.0}
+
+    call = {"amount": 10000, "currency": "INR"}
+    dec_barely = evaluate_policy(payment_call=call, apiris_score=barely_flagged_score)
+    dec_clearly = evaluate_policy(payment_call=call, apiris_score=clearly_flagged_score)
+
+    assert dec_barely.verdict == "FLAG"
+    assert dec_clearly.verdict == "FLAG"
+    assert dec_barely.confidence < dec_clearly.confidence, (
+        f"Barely flagged confidence ({dec_barely.confidence}) must be lower than clearly flagged ({dec_clearly.confidence})"
+    )
+    assert dec_barely.confidence <= 0.75
+    assert dec_clearly.confidence >= 0.90
+
+
 def test_block_decision_explanation_names_primary_factor():
     """
     Phase 5 Test 1:
@@ -297,9 +323,9 @@ def test_block_decision_explanation_names_primary_factor():
 
 def test_audit_db_persistence_and_retrieval():
     """
-    Phase 5 Test 2:
-    Confirms a row written via check() / control plane is persistently stored in
-    SQLite and retrievable via get_recent_decisions() / /decisions read path.
+    Phase 5 Test 2 & Item 3:
+    Hits FastAPI endpoints directly via TestClient (/gate/check, /decisions, /decisions/{id})
+    to confirm end-to-end HTTP persistence and paginated retrieval.
     """
     init_db()
     client = TestClient(app)
@@ -320,6 +346,7 @@ def test_audit_db_persistence_and_retrieval():
     assert res_data["verdict"] == "ALLOW"
     audit_id = res_data.get("audit_id")
     assert audit_id is not None and audit_id > 0
+    assert res_data.get("allow_token") is not None
 
     # 2. Retrieve through GET /decisions read path filtered by agent_id
     get_res = client.get(f"/decisions?agent_id={unique_agent}")
@@ -333,3 +360,263 @@ def test_audit_db_persistence_and_retrieval():
     assert latest["primary_factor"] == "policy_cleared"
     assert "APPROVED" in latest["summary"]
     assert latest["evidence"]["policy"]["amount_inr"] == 250.0
+
+    # 3. Retrieve single record via GET /decisions/{id}
+    single_res = client.get(f"/decisions/{audit_id}")
+    assert single_res.status_code == 200
+    single_item = single_res.json()
+    assert single_item["id"] == audit_id
+    assert single_item["agent_id"] == unique_agent
+
+
+def test_amount_paise_and_inr_conversion_accuracy():
+    """
+    Item 4 Verification:
+    Asserts exact 100:1 conversion between amount_paise and amount_inr in SQLite audit DB.
+    """
+    init_db()
+    client = TestClient(app)
+    agent_id = f"agent_unit_test_{int(time.time())}"
+    test_amount_paise = 123456  # ₹1,234.56
+
+    res = client.post(
+        "/gate/check",
+        json={
+            "amount": test_amount_paise,
+            "currency": "INR",
+            "agent_id": agent_id,
+            "action": "create_order",
+        },
+    )
+    assert res.status_code == 200
+    audit_id = res.json()["audit_id"]
+
+    record = client.get(f"/decisions/{audit_id}").json()
+    assert record["amount_paise"] == test_amount_paise
+    assert record["amount_inr"] == round(test_amount_paise / 100.0, 2)
+    assert record["amount_inr"] == 1234.56
+
+
+def test_orders_endpoint_forbidden_without_valid_allow_token():
+    """
+    Phase 6 Test 1:
+    Confirms POST /orders returns 403 Forbidden when called with missing,
+    forged, or expired ALLOW tokens.
+    """
+    client = TestClient(app)
+
+    # 1. Missing / invalid token
+    res_invalid = client.post(
+        "/orders",
+        json={
+            "agent_id": "buyer_agent_01",
+            "amount_paise": 50000,
+            "receipt": "rcpt_invalid_token",
+            "allow_token": "forged.token12345",
+        },
+    )
+    assert res_invalid.status_code == 403
+    assert "Forbidden" in res_invalid.json()["detail"]
+
+    # 2. Expired token (> 30s TTL)
+    old_timestamp = time.time() - 45.0  # 45 seconds ago
+    expired_token = razorpay_client.mint_allow_token(
+        agent_id="buyer_agent_01",
+        amount_paise=50000,
+        receipt="rcpt_expired",
+        timestamp=old_timestamp,
+    )
+    res_expired = client.post(
+        "/orders",
+        json={
+            "agent_id": "buyer_agent_01",
+            "amount_paise": 50000,
+            "receipt": "rcpt_expired",
+            "allow_token": expired_token,
+        },
+    )
+    assert res_expired.status_code == 403
+    assert "Forbidden" in res_expired.json()["detail"]
+
+
+def test_allow_token_mismatch_and_replay_defense():
+    """
+    Phase 6 Negative Path Test 2 (Replay / Tampering Defense):
+    Proves that a cryptographically valid ALLOW token minted for:
+      (agent='agent_alice', amount=10000, receipt='rcpt_1')
+    is REJECTED with 403 Forbidden if presented by:
+      (a) A different agent ('agent_bob')
+      (b) A different/tampered amount (amount=50000)
+      (c) A different receipt ('rcpt_2')
+    """
+    client = TestClient(app)
+    valid_token = razorpay_client.mint_allow_token(
+        agent_id="agent_alice",
+        amount_paise=10000,
+        receipt="rcpt_1",
+    )
+
+    # (a) Mismatched agent_id
+    res_agent_mismatch = client.post(
+        "/orders",
+        json={
+            "agent_id": "agent_bob",
+            "amount_paise": 10000,
+            "receipt": "rcpt_1",
+            "allow_token": valid_token,
+        },
+    )
+    assert res_agent_mismatch.status_code == 403
+    assert "Forbidden" in res_agent_mismatch.json()["detail"]
+
+    # (b) Tampered / escalated amount
+    res_amount_mismatch = client.post(
+        "/orders",
+        json={
+            "agent_id": "agent_alice",
+            "amount_paise": 50000,  # Escalated from 10000 -> 50000
+            "receipt": "rcpt_1",
+            "allow_token": valid_token,
+        },
+    )
+    assert res_amount_mismatch.status_code == 403
+    assert "Forbidden" in res_amount_mismatch.json()["detail"]
+
+    # (c) Mismatched receipt
+    res_receipt_mismatch = client.post(
+        "/orders",
+        json={
+            "agent_id": "agent_alice",
+            "amount_paise": 10000,
+            "receipt": "rcpt_forged_2",
+            "allow_token": valid_token,
+        },
+    )
+    assert res_receipt_mismatch.status_code == 403
+    assert "Forbidden" in res_receipt_mismatch.json()["detail"]
+
+
+def test_orders_endpoint_creates_order_and_links_audit_id():
+    """
+    Phase 6 Test 3 (Audit-to-Order Link):
+    Confirms that check() producing an ALLOW verdict yields an allow_token,
+    which executes POST /orders within TTL and links the resulting razorpay_order_id
+    back to the originating SQLite audit ledger row.
+    """
+    init_db()
+    client = TestClient(app)
+    agent_id = f"agent_buyer_{int(time.time())}"
+    amount_paise = 25000
+    receipt = f"rcpt_e2e_{int(time.time())}"
+
+    # 1. Gate check produces ALLOW and returns audit_id + allow_token
+    check_res = client.post(
+        "/gate/check",
+        json={
+            "amount": amount_paise,
+            "currency": "INR",
+            "agent_id": agent_id,
+            "receipt": receipt,
+            "action": "create_order",
+        },
+    )
+    assert check_res.status_code == 200
+    check_data = check_res.json()
+    assert check_data["verdict"] == "ALLOW"
+    audit_id = check_data["audit_id"]
+    allow_token = check_data["allow_token"]
+    assert audit_id is not None
+    assert allow_token is not None
+
+    # 2. Call POST /orders with audit_id and allow_token
+    mock_rzp_id = f"order_rzp_{int(time.time())}"
+    with patch.object(
+        razorpay_client.client.order,
+        "create",
+        return_value={
+            "id": mock_rzp_id,
+            "entity": "order",
+            "amount": amount_paise,
+            "currency": "INR",
+            "receipt": receipt,
+            "status": "created",
+        },
+    ):
+        order_res = client.post(
+            "/orders",
+            json={
+                "agent_id": agent_id,
+                "amount_paise": amount_paise,
+                "receipt": receipt,
+                "allow_token": allow_token,
+                "currency": "INR",
+                "audit_id": audit_id,
+            },
+        )
+        assert order_res.status_code == 200
+        order_body = order_res.json()
+        assert order_body["status"] == "created"
+        assert order_body["order"]["id"] == mock_rzp_id
+
+    # 3. Verify SQLite decision row is updated with razorpay_order_id
+    updated_record = client.get(f"/decisions/{audit_id}").json()
+    assert updated_record["razorpay_order_id"] == mock_rzp_id
+
+
+def test_created_order_is_retrievable_from_razorpay():
+    """
+    Phase 6 Test 4:
+    Automated regression guard proving that creating an order and fetching it back
+    via client.order.fetch(order_id) retrieves the exact same order structure.
+    Executes live against real Razorpay API when real credentials are present.
+    """
+    agent_id = "test_fetch_agent"
+    amount_paise = 30000
+    receipt = f"rcpt_fetch_{int(time.time())}"
+
+    # If real test credentials are configured, run against live Razorpay API
+    is_live_key = settings.razorpay_key_id.startswith("rzp_test_") and "dummy" not in settings.razorpay_key_id
+
+    if is_live_key:
+        token = razorpay_client.mint_allow_token(agent_id, amount_paise, receipt)
+        created = razorpay_client.create_gated_order(
+            agent_id=agent_id,
+            amount_paise=amount_paise,
+            receipt=receipt,
+            allow_token=token,
+        )
+        assert created["id"].startswith("order_")
+        assert created["status"] == "created"
+
+        fetched = razorpay_client.fetch_order(created["id"])
+        assert fetched["id"] == created["id"]
+        assert fetched["amount"] == amount_paise
+        assert fetched["receipt"] == receipt
+        assert fetched["status"] == "created"
+    else:
+        # Deterministic unit test fallback
+        expected_order_id = f"order_fetch_{int(time.time())}"
+        order_payload = {
+            "id": expected_order_id,
+            "entity": "order",
+            "amount": amount_paise,
+            "amount_paid": 0,
+            "amount_due": amount_paise,
+            "currency": "INR",
+            "receipt": receipt,
+            "status": "created",
+            "attempts": 0,
+        }
+        with patch.object(razorpay_client.client.order, "create", return_value=order_payload), \
+             patch.object(razorpay_client.client.order, "fetch", return_value=order_payload):
+            token = razorpay_client.mint_allow_token(agent_id, amount_paise, receipt)
+            created = razorpay_client.create_gated_order(
+                agent_id=agent_id,
+                amount_paise=amount_paise,
+                receipt=receipt,
+                allow_token=token,
+            )
+            assert created["id"] == expected_order_id
+            fetched = razorpay_client.fetch_order(created["id"])
+            assert fetched["id"] == expected_order_id
+            assert fetched["amount"] == amount_paise

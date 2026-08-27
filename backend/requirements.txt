@@ -1,4 +1,4 @@
-apiris>=1.0.2
+apiris==1.1.1
 razorpay
 anthropic
 fastapi

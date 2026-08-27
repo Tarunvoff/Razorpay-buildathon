@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 import json
 from pathlib import Path
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 # Ensure project root is in sys.path
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
@@ -13,17 +13,32 @@ if str(ROOT_DIR) not in sys.path:
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.audit.db import (
     get_decision_by_id,
     get_recent_decisions,
     init_db,
+    link_order_to_decision,
     record_decision,
 )
 from backend.gate import adapter
 from backend.gate.behavior import behavior_analyzer
 from backend.gate.policy import load_policy_config
+from backend.payments import razorpay_client
+
+# Active SSE subscriber queues for real-time live decision streaming
+_sse_subscribers: Set[asyncio.Queue] = set()
+
+
+async def broadcast_decision_event(event_data: Dict[str, Any]):
+    """Broadcasts a decision event to all connected SSE clients."""
+    payload = f"data: {json.dumps(event_data)}\n\n"
+    for queue in list(_sse_subscribers):
+        try:
+            queue.put_nowait(payload)
+        except Exception:
+            _sse_subscribers.discard(queue)
 
 
 @asynccontextmanager
@@ -49,16 +64,46 @@ app.add_middleware(
 
 
 class PaymentCheckRequest(BaseModel):
-    amount: int
-    currency: str = "INR"
+    """
+    Public payment check request payload.
+
+    UNIT CONVENTION:
+    `amount`: Integer amount in PAISE (Razorpay native currency subunit, e.g. 50000 = ₹500.00).
+    `currency`: ISO currency code, default 'INR'.
+    """
+
+    amount: int = Field(
+        ...,
+        description="Amount in paise (Razorpay native subunit, e.g. 50000 = ₹500.00 INR)",
+    )
+    currency: str = Field(default="INR", description="ISO currency code")
     merchant_id: Optional[str] = None
     order_id: Optional[str] = None
+    receipt: Optional[str] = None
     action: str = "create_order"
     session_id: Optional[str] = "default_session"
     agent_id: Optional[str] = None
     mock_response: Optional[Dict[str, Any]] = None
     mock_behavior_signal: Optional[Dict[str, Any]] = None
     timing_ms: Optional[float] = 50.0
+
+
+class CreateOrderRequest(BaseModel):
+    """
+    Gated Razorpay order creation request.
+    Requires server-issued ALLOW token minted by RazorGate gate check.
+    """
+
+    agent_id: str
+    amount_paise: int = Field(..., description="Amount in paise (e.g. 50000 = ₹500.00 INR)")
+    receipt: str
+    allow_token: str
+    currency: str = "INR"
+    audit_id: Optional[int] = Field(
+        default=None,
+        description="Originating audit decision ID for forward-traceability",
+    )
+    notes: Optional[Dict[str, Any]] = None
 
 
 @app.get("/health")
@@ -78,6 +123,39 @@ def list_decisions(
     return get_recent_decisions(limit=limit, offset=offset, agent_id=agent_id)
 
 
+@app.get("/decisions/stream")
+async def stream_decisions():
+    """
+    Real-time Server-Sent Events (SSE) stream for live decision feeds and audit monitoring.
+    """
+    queue: asyncio.Queue = asyncio.Queue()
+    _sse_subscribers.add(queue)
+
+    async def event_generator():
+        try:
+            # Initial connection event
+            yield f"data: {json.dumps({'type': 'connected', 'service': 'razorgate'})}\n\n"
+            while True:
+                try:
+                    # Wait for next broadcast event or send keepalive heartbeat every 15s
+                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    yield event
+                except asyncio.TimeoutError:
+                    yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+        finally:
+            _sse_subscribers.discard(queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.get("/decisions/{decision_id}")
 def get_decision(decision_id: int):
     """
@@ -89,22 +167,12 @@ def get_decision(decision_id: int):
     return record
 
 
-@app.get("/decisions/stream")
-async def stream_decisions():
-    async def event_generator():
-        while True:
-            # Heartbeat event to verify end-to-end SSE connection
-            yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
-            await asyncio.sleep(5)
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-
 @app.post("/gate/check")
-def check_payment(req: PaymentCheckRequest):
+async def check_payment(req: PaymentCheckRequest):
     """
     Evaluates an agent payment call through Apiris scoring and RazorGate policy,
-    and persists the decision record to the SQLite audit ledger.
+    persists the decision record to the SQLite audit ledger, broadcasts live SSE,
+    and returns an ALLOW token if approved.
     """
     call_dict = req.model_dump()
     agent_id = req.agent_id or req.session_id or "default_agent"
@@ -150,10 +218,58 @@ def check_payment(req: PaymentCheckRequest):
         evidence=evidence,
     )
 
-    return {
+    response_payload = {
         **result,
         "audit_id": row_id,
     }
+
+    # Broadcast live decision event to SSE subscribers
+    await broadcast_decision_event({
+        "type": "decision",
+        "audit_id": row_id,
+        "agent_id": agent_id,
+        "verdict": verdict,
+        "amount_paise": req.amount,
+        "amount_inr": amount_inr,
+        "primary_factor": primary_factor,
+        "summary": summary,
+        "confidence": confidence,
+        "allow_token": result.get("allow_token"),
+    })
+
+    return response_payload
+
+
+@app.post("/orders")
+def create_order(req: CreateOrderRequest):
+    """
+    Executes real Razorpay Orders API call.
+    Strictly gated by server-issued HMAC ALLOW token minted within 30s TTL.
+    Links the resulting Razorpay order ID back to the originating audit decision.
+    """
+    try:
+        order_res = razorpay_client.create_gated_order(
+            agent_id=req.agent_id,
+            amount_paise=req.amount_paise,
+            receipt=req.receipt,
+            allow_token=req.allow_token,
+            currency=req.currency,
+            notes=req.notes,
+        )
+
+        # Link Razorpay Order ID to audit ledger row if audit_id provided
+        if req.audit_id and "id" in order_res:
+            link_order_to_decision(audit_id=req.audit_id, razorpay_order_id=order_res["id"])
+
+        return {
+            "status": "created",
+            "order": order_res,
+            "audit_id": req.audit_id,
+        }
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Razorpay API Error: {str(e)}")
 
 
 @app.get("/gate/policy")
