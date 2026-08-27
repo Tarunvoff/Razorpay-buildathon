@@ -23,6 +23,7 @@ from backend.agent.protocol import (
 )
 from backend.audit.db import init_db
 from backend.config import settings
+from backend.gate.policy import load_policy_config
 from backend.payments import razorpay_client
 
 
@@ -56,7 +57,7 @@ def test_a2a_full_protocol_roundtrip_happy_path():
             merchant=merchant,
             intent="GPU compute for model inference",
             category="ai_compute",
-            strategy="best_fit",
+            strategy="intent_match",
         )
 
         assert receipt.verdict == "ALLOW"
@@ -93,7 +94,7 @@ def test_a2a_full_protocol_roundtrip_happy_path():
                 merchant=merchant,
                 intent="GPU compute for model inference",
                 category="ai_compute",
-                strategy="best_fit",
+                strategy="intent_match",
             )
 
             assert receipt.verdict == "ALLOW"
@@ -104,7 +105,7 @@ def test_a2a_full_protocol_roundtrip_happy_path():
             fetched_order = razorpay_client.fetch_order(mock_order_id)
             assert fetched_order["id"] == mock_order_id
 
-    # Verify transcript contains all 5 steps in order
+    # Verify transcript contains all 6 steps in order
     step_names = [entry["step"] for entry in transcript]
     assert step_names == [
         "capability_discovery",
@@ -118,11 +119,11 @@ def test_a2a_full_protocol_roundtrip_happy_path():
 
 def test_a2a_tampered_mandate_rejected_before_orders():
     """
-    Test 2: Tampered Mandate Rejection.
-    A mandate signed for one amount/SKU (e.g. ₹149.00 / 14,900 paise)
-    is tampered with by claiming a different amount (e.g. ₹299.00 / 29,900 paise)
-    or invalid signature.
-    Must be rejected with BLOCK before touching the gate check or Razorpay /orders.
+    Test 2: Tampered Mandate Rejection (Amount Tampering & Same-Amount SKU Substitution).
+    Proves that:
+      (a) Altering amount invalidates HMAC signature.
+      (b) Substituting a different SKU at the SAME signed amount invalidates HMAC signature.
+    Both must be rejected with BLOCK before touching the gate check or Razorpay /orders.
     """
     init_db()
     merchant = MerchantAgent(
@@ -135,7 +136,7 @@ def test_a2a_tampered_mandate_rejected_before_orders():
         secret_key="secret_legit_key",
     )
 
-    # 1. Buyer creates valid signature for ₹149.00 (compute-gpu-a100-1hr)
+    # 1. Buyer signs valid mandate for A100 (₹149.00 / 14,900 paise)
     ts, valid_sig = sign_payment_mandate(
         buyer_agent_id="buyer_tamper_test",
         merchant_id="merchant_tamper_test",
@@ -144,12 +145,12 @@ def test_a2a_tampered_mandate_rejected_before_orders():
         secret_key="secret_legit_key",
     )
 
-    # 2. Tampered Mandate: Amount is altered to 29900 paise (₹299.00) while keeping signature
-    tampered_mandate = PaymentMandate(
+    # Case A: Amount Tampering (14900 -> 29900)
+    tampered_amount_mandate = PaymentMandate(
         buyer_agent_id="buyer_tamper_test",
         merchant_id="merchant_tamper_test",
         sku="compute-gpu-a100-1hr",
-        amount_paise=29900,  # Tampered from 14900 to 29900!
+        amount_paise=29900,  # Altered!
         currency="INR",
         timestamp=float(ts),
         reasoning="Attempting tampered amount mandate",
@@ -157,56 +158,108 @@ def test_a2a_tampered_mandate_rejected_before_orders():
     )
 
     with patch("backend.payments.razorpay_client.create_gated_order") as mock_create:
-        receipt = merchant.process_mandate(tampered_mandate)
+        receipt_a = merchant.process_mandate(tampered_amount_mandate)
+        assert receipt_a.verdict == "BLOCK"
+        assert receipt_a.primary_factor == "invalid_mandate_signature"
+        assert "BLOCKED: Cryptographic signature verification failed" in receipt_a.summary
+        assert receipt_a.order is None
+        mock_create.assert_not_called()
 
-        # Assert rejection before payments
-        assert receipt.verdict == "BLOCK"
-        assert receipt.primary_factor == "invalid_mandate_signature"
-        assert "BLOCKED: Cryptographic signature verification failed" in receipt.summary
-        assert receipt.order is None
+    # Case B: SKU Substitution at SAME Amount (compute-gpu-a100-1hr -> compute-gpu-l4-1hr at 14900 paise)
+    tampered_sku_mandate = PaymentMandate(
+        buyer_agent_id="buyer_tamper_test",
+        merchant_id="merchant_tamper_test",
+        sku="compute-gpu-l4-1hr",  # Altered SKU!
+        amount_paise=14900,        # Same signed amount
+        currency="INR",
+        timestamp=float(ts),
+        reasoning="Attempting substituted SKU mandate with same amount",
+        signature=valid_sig,
+    )
+
+    with patch("backend.payments.razorpay_client.create_gated_order") as mock_create:
+        receipt_b = merchant.process_mandate(tampered_sku_mandate)
+        assert receipt_b.verdict == "BLOCK"
+        assert receipt_b.primary_factor == "invalid_mandate_signature"
+        assert "BLOCKED: Cryptographic signature verification failed" in receipt_b.summary
+        assert receipt_b.order is None
         mock_create.assert_not_called()
 
 
 def test_a2a_best_match_is_not_first_offer():
     """
-    Test 3: Best-Match-Isn't-First-Offer (Genuine Comparative Reasoning).
-    Proves that the Buyer Agent genuinely compares multiple candidate offers,
-    selects an offer that is NOT the 1st item in the received list,
-    and states explicit comparative reasoning referencing the alternatives.
+    Test 3: Best-Match-Isn't-First-Offer (Genuine Non-Positional Comparative Reasoning).
+    Proves that the Buyer Agent evaluates candidate offers based on intent and constraints:
+      (a) When intent requests lowest-cost / light accelerator, selects L4 (3rd offer / cheapest).
+      (b) When intent requests maximum memory 80GB H100, selects H100 (1st offer / most expensive).
+    Asserts both choices and reasonings dynamically adapt and reference the competing options.
     """
     merchant = MerchantAgent(merchant_id="merchant_catalog_test")
-    buyer = BuyerAgent(
-        agent_id="buyer_comparison_test",
+
+    # Scenario A: Cost-effective intent -> selects cheapest option (3rd offer: L4 at ₹79.00)
+    buyer_budget = BuyerAgent(
+        agent_id="buyer_cost_test",
         max_budget_paise=50000,  # ₹500.00
     )
-
-    # Request offers for AI compute
-    offers = buyer.send_task_request(
+    offers_budget = buyer_budget.send_task_request(
         merchant=merchant,
-        intent="compute instance",
+        intent="lowest cost affordable GPU for audio processing",
         category="ai_compute",
         max_budget_paise=50000,
     )
 
-    assert len(offers.offers) >= 3
-    first_offer = offers.offers[0]  # e.g., H100 at ₹299.00
+    assert len(offers_budget.offers) >= 3
+    first_offer = offers_budget.offers[0]  # H100 at ₹299.00
 
-    # Strategy: "lowest_price" selects the cheapest offer (e.g., L4 at ₹79.00, which is index 2)
-    selected_offer, reasoning = buyer.evaluate_and_select_offer(
-        offer_list=offers,
-        strategy="lowest_price",
+    selected_cheap, reasoning_cheap = buyer_budget.evaluate_and_select_offer(
+        offer_list=offers_budget,
+        intent="lowest cost affordable GPU for audio processing",
     )
 
-    # Assert that the chosen offer is NOT the first offer in the catalog list
-    assert selected_offer.sku != first_offer.sku, (
-        f"Selected offer ({selected_offer.sku}) must not default to first offer ({first_offer.sku})"
-    )
-    assert selected_offer.amount_paise < first_offer.amount_paise
+    # Must NOT be first offer (H100) or middle offer (A100)
+    assert selected_cheap.sku == "compute-gpu-l4-1hr"
+    assert selected_cheap.sku != first_offer.sku
+    assert selected_cheap.amount_paise == 7900
+    assert "compute-gpu-l4-1hr" in reasoning_cheap
+    assert "₹79.00" in reasoning_cheap
+    assert "compute-gpu-h100-1hr" in reasoning_cheap or "higher-priced" in reasoning_cheap
 
-    # Assert anti-hallucination constraint: reasoning contains selected SKU and references alternatives
-    assert selected_offer.sku in reasoning
-    assert f"₹{selected_offer.amount_paise / 100:.2f}" in reasoning
-    assert "lowest cost" in reasoning.lower() or "budget" in reasoning.lower()
+    # Scenario B: High-end intent -> selects most expensive option (1st offer: H100 at ₹299.00)
+    buyer_perf = BuyerAgent(
+        agent_id="buyer_perf_test",
+        max_budget_paise=50000,  # ₹500.00
+    )
+    offers_perf = buyer_perf.send_task_request(
+        merchant=merchant,
+        intent="NVIDIA H100 80GB maximum memory for LLM fine-tuning",
+        category="ai_compute",
+        max_budget_paise=50000,
+    )
+
+    selected_perf, reasoning_perf = buyer_perf.evaluate_and_select_offer(
+        offer_list=offers_perf,
+        intent="NVIDIA H100 80GB maximum memory for LLM fine-tuning",
+    )
+
+    assert selected_perf.sku == "compute-gpu-h100-1hr"
+    assert selected_perf.amount_paise == 29900
+    assert "compute-gpu-h100-1hr" in reasoning_perf
+    assert "₹299.00" in reasoning_perf
+    assert "lower-tier" in reasoning_perf or "compute-gpu-a100-1hr" in reasoning_perf or "80gb" in reasoning_perf.lower()
+
+
+def test_a2a_agent_card_reads_canonical_policy_ceiling():
+    """
+    Item 3 Verification:
+    Asserts that AgentCard and GateDisclosure dynamically read the policy ceiling
+    from policy.yaml directly (single source of truth).
+    """
+    canonical_ceiling = load_policy_config()["max_order_amount_inr"]
+    merchant = MerchantAgent()
+    card = merchant.get_agent_card()
+
+    assert card.gate_disclosure.max_order_ceiling_inr == canonical_ceiling
+    assert card.gate_disclosure.max_order_ceiling_inr == 50000.0
 
 
 def test_a2a_over_ceiling_blocked_with_explanation():

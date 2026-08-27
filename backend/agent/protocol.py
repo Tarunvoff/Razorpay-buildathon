@@ -12,12 +12,21 @@ import time
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
+from backend.gate.policy import load_policy_config
+
+
+def get_canonical_policy_ceiling_inr() -> float:
+    """Retrieves the canonical max order ceiling from policy.yaml."""
+    cfg = load_policy_config()
+    return float(cfg.get("max_order_amount_inr", 50000.0))
+
 
 class GateDisclosure(BaseModel):
     """
     Explicit disclosure advertised by the Merchant Agent.
     States that every transaction is evaluated in real-time by RazorGate
     deterministic security policies and is subject to ALLOW / FLAG / BLOCK gating.
+    Reads ceiling dynamically from canonical policy.yaml.
     """
     gating_enforced: bool = True
     gating_policy: str = "RazorGate Deterministic Policy v1.0"
@@ -26,7 +35,7 @@ class GateDisclosure(BaseModel):
         "subject to ALLOW/FLAG/BLOCK gating before payment execution."
     )
     supported_verdicts: List[str] = Field(default_factory=lambda: ["ALLOW", "FLAG", "BLOCK"])
-    max_order_ceiling_inr: float = 50000.0
+    max_order_ceiling_inr: float = Field(default_factory=get_canonical_policy_ceiling_inr)
 
 
 class AgentCard(BaseModel):

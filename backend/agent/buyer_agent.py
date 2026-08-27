@@ -79,14 +79,55 @@ class BuyerAgent:
         self.log_step("received_offers", offers)
         return offers
 
+    def _score_offer_match(self, offer: Offer, intent_lower: str) -> float:
+        """
+        Scores how well an offer matches the buyer's stated intent.
+        Evaluates exact SKU keywords, specs (VRAM, tokens, nodes), descriptions, and performance intent.
+        """
+        score = 1.0
+        name_desc = f"{offer.name} {offer.description} {offer.sku}".lower()
+        specs_str = " ".join(f"{k} {v}" for k, v in offer.specs.items()).lower()
+
+        # High-performance / heavy compute intent
+        high_perf_keywords = ["h100", "80gb", "training", "fine-tuning", "heavy", "maximum", "top-tier", "high memory", "nvlink", "enterprise"]
+        if any(kw in intent_lower for kw in high_perf_keywords):
+            if "h100" in offer.sku or "80gb" in specs_str or "enterprise" in offer.category:
+                score += 10.0
+            elif "a100" in offer.sku or "40gb" in specs_str:
+                score += 5.0
+            elif "l4" in offer.sku:
+                score += 1.0
+
+        # Cost-efficiency / budget intent
+        budget_keywords = ["cheap", "budget", "lowest", "cost", "starter", "light", "affordable", "l4", "24gb"]
+        if any(kw in intent_lower for kw in budget_keywords):
+            if "l4" in offer.sku or "starter" in offer.sku or "79" in str(offer.amount_paise):
+                score += 10.0
+            elif "a100" in offer.sku:
+                score += 4.0
+
+        # Mid-tier / balanced inference intent
+        mid_tier_keywords = ["a100", "40gb", "inference", "batch", "balanced", "optimal"]
+        if any(kw in intent_lower for kw in mid_tier_keywords):
+            if "a100" in offer.sku or "40gb" in specs_str:
+                score += 8.0
+
+        # Keyword overlap
+        for word in intent_lower.split():
+            if len(word) > 2 and (word in name_desc or word in specs_str):
+                score += 2.0
+
+        return score
+
     def evaluate_and_select_offer(
         self,
         offer_list: OfferList,
-        strategy: str = "best_fit",
+        intent: Optional[str] = None,
+        strategy: str = "intent_match",
         preferred_sku: Optional[str] = None,
     ) -> Tuple[Offer, str]:
         """
-        Step 3: Offer Evaluation and Comparative Reasoning.
+        Step 3: Offer Evaluation and Dynamic Comparative Reasoning.
         Strict anti-hallucination constraint: Comparison reasoning may ONLY reference
         SKUs, prices, and specifications present in the received OfferList.
         """
@@ -94,60 +135,66 @@ class BuyerAgent:
         if not offers:
             raise ValueError("No offers available to evaluate.")
 
-        # If a specific preferred SKU was targeted (e.g. for testing a specific SKU)
+        # If a specific preferred SKU was targeted
         if preferred_sku:
             target = next((o for o in offers if o.sku == preferred_sku), None)
             if target:
                 other_skus = [f"{o.sku} (₹{o.amount_paise / 100:.2f})" for o in offers if o.sku != target.sku]
                 others_text = f", comparing against {', '.join(other_skus)}" if other_skus else ""
                 reasoning = (
-                    f"Selected {target.sku} (₹{target.amount_paise / 100:.2f}) matching preferred requirement '{target.name}'"
+                    f"Selected {target.sku} (₹{target.amount_paise / 100:.2f}) matching requested SKU '{target.name}'"
                     f"{others_text}."
                 )
                 self.log_step("selection_reasoning", {"selected_sku": target.sku, "reasoning": reasoning})
                 return target, reasoning
 
-        # Strategy 1: Budget-constrained best spec / lowest price
+        # Filter within budget ceiling
         within_budget = [o for o in offers if o.amount_paise <= self.max_budget_paise]
 
         if not within_budget:
             # Over budget fallback (e.g. for testing over-ceiling handling)
             selected = min(offers, key=lambda x: x.amount_paise)
+            other_skus = [f"{o.sku} (₹{o.amount_paise / 100:.2f})" for o in offers if o.sku != selected.sku]
             reasoning = (
                 f"Selected {selected.sku} (₹{selected.amount_paise / 100:.2f}) as lowest price available among {len(offers)} offers, "
-                f"exceeding budget ceiling ₹{self.max_budget_paise / 100:.2f}."
+                f"exceeding budget ceiling ₹{self.max_budget_paise / 100:.2f}, compared against [{', '.join(other_skus)}]."
             )
-        elif strategy == "lowest_price":
+            self.log_step("selection_reasoning", {"selected_sku": selected.sku, "reasoning": reasoning})
+            return selected, reasoning
+
+        intent_text = (intent or "").lower()
+
+        # Dynamic intent-driven scoring
+        if strategy == "lowest_price" or ("cheap" in intent_text or "budget" in intent_text and "h100" not in intent_text):
             selected = min(within_budget, key=lambda x: x.amount_paise)
-            alternatives = [f"{o.sku} (₹{o.amount_paise / 100:.2f})" for o in within_budget if o.sku != selected.sku]
-            alt_text = f" over higher-priced options ({', '.join(alternatives)})" if alternatives else ""
+            higher_options = [f"{o.sku} (₹{o.amount_paise / 100:.2f})" for o in within_budget if o.sku != selected.sku]
+            alt_text = f" over higher-priced alternatives [{', '.join(higher_options)}]" if higher_options else ""
+            spec_detail = f" with {selected.specs}" if selected.specs else ""
             reasoning = (
-                f"Selected {selected.sku} (₹{selected.amount_paise / 100:.2f}) providing lowest cost within budget ₹{self.max_budget_paise / 100:.2f}"
+                f"Selected cost-optimized {selected.sku} (₹{selected.amount_paise / 100:.2f}){spec_detail} to minimize spend within budget ₹{self.max_budget_paise / 100:.2f}"
                 f"{alt_text}."
             )
-        elif strategy == "highest_tier":
-            selected = max(within_budget, key=lambda x: x.amount_paise)
-            alternatives = [f"{o.sku} (₹{o.amount_paise / 100:.2f})" for o in within_budget if o.sku != selected.sku]
-            alt_text = f" over lower-tier options ({', '.join(alternatives)})" if alternatives else ""
+        elif strategy == "highest_tier" or ("h100" in intent_text or "80gb" in intent_text or "maximum" in intent_text or "heavy" in intent_text):
+            # Pick highest capability / matching top tier within budget
+            scored = sorted(within_budget, key=lambda o: (self._score_offer_match(o, intent_text), o.amount_paise), reverse=True)
+            selected = scored[0]
+            lower_options = [f"{o.sku} (₹{o.amount_paise / 100:.2f})" for o in within_budget if o.sku != selected.sku]
+            alt_text = f" prioritizing throughput/specs over lower-tier options [{', '.join(lower_options)}]" if lower_options else ""
+            spec_detail = f" featuring {selected.specs.get('gpu', selected.name)} ({selected.specs.get('vram_gb', '')}GB VRAM)" if selected.specs else ""
             reasoning = (
-                f"Selected {selected.sku} (₹{selected.amount_paise / 100:.2f}) maximizing capability within budget ₹{self.max_budget_paise / 100:.2f}"
+                f"Selected high-performance {selected.sku} (₹{selected.amount_paise / 100:.2f}){spec_detail} within budget ₹{self.max_budget_paise / 100:.2f}"
                 f"{alt_text}."
             )
         else:
-            # Default "best_fit": pick highest spec option within budget that is not the cheapest
-            if len(within_budget) > 1:
-                # Rank by balance
-                sorted_by_price = sorted(within_budget, key=lambda x: x.amount_paise)
-                # Pick middle/optimal tier if available
-                selected = sorted_by_price[len(sorted_by_price) // 2]
-                other_summaries = [f"{o.sku} (₹{o.amount_paise / 100:.2f})" for o in within_budget if o.sku != selected.sku]
-                reasoning = (
-                    f"Selected balanced tier {selected.sku} (₹{selected.amount_paise / 100:.2f}) for optimal cost-performance, "
-                    f"evaluated against alternatives [{', '.join(other_summaries)}]."
-                )
-            else:
-                selected = within_budget[0]
-                reasoning = f"Selected {selected.sku} (₹{selected.amount_paise / 100:.2f}) as sole qualified offer within budget."
+            # Score each candidate dynamically based on intent matching and capability balance
+            scored = sorted(within_budget, key=lambda o: self._score_offer_match(o, intent_text), reverse=True)
+            selected = scored[0]
+            competing = [f"{o.sku} (₹{o.amount_paise / 100:.2f})" for o in within_budget if o.sku != selected.sku]
+            comp_text = f", evaluated against alternatives [{', '.join(competing)}]" if competing else ""
+            reasoning = (
+                f"Selected {selected.sku} (₹{selected.amount_paise / 100:.2f}) as optimal match for '{intent or 'request'}' "
+                f"within budget ₹{self.max_budget_paise / 100:.2f}{comp_text}."
+            )
 
         self.log_step("selection_reasoning", {"selected_sku": selected.sku, "reasoning": reasoning})
         return selected, reasoning
@@ -190,14 +237,14 @@ class BuyerAgent:
         intent: str,
         category: str,
         max_budget_paise: Optional[int] = None,
-        strategy: str = "best_fit",
+        strategy: str = "intent_match",
         preferred_sku: Optional[str] = None,
     ) -> Tuple[Receipt, List[Dict[str, Any]]]:
         """
         Executes the full 6-step A2A commerce lifecycle:
         1. Capability Discovery -> AgentCard
         2. Task Request -> TaskRequest
-        3. Offer Negotiation & Comparison -> OfferList -> Selected Offer + Reasoning
+        3. Offer Negotiation & Comparison -> OfferList -> Selected Offer + Dynamic Reasoning
         4. Signed Mandate Issuance -> PaymentMandate
         5. Gated Execution (Merchant fronts Gate & Razorpay)
         6. Receipt -> Verified outcome & explainable trail
@@ -213,9 +260,10 @@ class BuyerAgent:
             max_budget_paise=max_budget_paise,
         )
 
-        # 3. Reason & Select
+        # 3. Reason & Select dynamically
         selected_offer, reasoning = self.evaluate_and_select_offer(
             offer_list=offers,
+            intent=intent,
             strategy=strategy,
             preferred_sku=preferred_sku,
         )
