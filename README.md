@@ -41,6 +41,29 @@ $$\text{risk\_weight} = 1.0 - \text{health\_score}$$
 - **Anti-Hallucination Guarantee**: Hard system-prompt constraints enforce that comparative reasoning strictly references SKUs, specs, and prices returned directly in tool output.
 
 
+## Known Architectural Limitations (Scope Boundaries)
+Due to buildathon time constraints, several systems use simplified architectures. The following areas are identified as out-of-scope for the current implementation and would require structural redesign for production readiness:
+
+### 1. SQLite Write Contention at Scale
+- **Current State:** The system relies on a single SQLite database (`audit.db`) for storing all gate decisions.
+- **Limitation:** SQLite is highly vulnerable to locking and write contention under high concurrency.
+- **Future Fix:** Requires a DB migration to a production-grade relational database (e.g., PostgreSQL or MySQL) capable of handling concurrent transactions.
+
+### 2. SSE Single-Process Fanout
+- **Current State:** The Server-Sent Events (SSE) log tailing endpoint runs in memory on a single process.
+- **Limitation:** It cannot scale out horizontally or sync messages across a distributed multi-node deployment.
+- **Future Fix:** Requires moving to a dedicated pub/sub architecture (e.g., Redis Pub/Sub) for distributed event broadcasting.
+
+### 3. Multi-Tenancy Isolation Gaps
+- **Current State:** The current proof-of-concept architecture simulates multiple agents (Buyer/Merchant) operating within shared application boundaries.
+- **Limitation:** Hard logical segregation (tenant-level data isolation, API key scoping per agent namespace) is not strictly enforced at the data layer.
+- **Future Fix:** Needs a comprehensive AuthZ framework redesign with scoped JWTs, role-based access control (RBAC), and tenant partitioning.
+
+### 4. Webhook Reliability
+- **Current State:** Payment success events are simulated or rely on synchronous checks instead of asynchronous webhook delivery.
+- **Limitation:** Lacks durability, retries, and dead-letter queues (DLQs) necessary for a reliable asynchronous payment architecture.
+- **Future Fix:** Implementing a dedicated webhook ingester service with signature verification and idempotent processing queues.
+
 ## Setup
 1. Create virtual environment & install dependencies:
    `python -m venv .venv`

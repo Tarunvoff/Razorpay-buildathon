@@ -108,6 +108,13 @@ class CreateOrderRequest(BaseModel):
     notes: Optional[Dict[str, Any]] = None
 
 
+class RefreshTokenRequest(BaseModel):
+    audit_id: int
+    agent_id: str
+    amount_paise: int
+    receipt: str
+
+
 class VerifyOrderRequest(BaseModel):
     """
     Razorpay payment signature verification request payload.
@@ -258,6 +265,33 @@ async def check_payment(req: PaymentCheckRequest):
     return response_payload
 
 
+@app.post("/gate/refresh-token")
+def refresh_token(req: RefreshTokenRequest):
+    """
+    Re-evaluates a previously ALLOWed decision that has expired due to TTL.
+    Mints a fresh token without changing the original request parameters.
+    """
+    record = get_decision_by_id(req.audit_id)
+    if not record or record.get("agent_id") != req.agent_id or record.get("amount_paise") != req.amount_paise:
+        raise HTTPException(status_code=400, detail="Invalid refresh request: context mismatch")
+    
+    evidence = record.get("evidence", {})
+    original_request = evidence.get("request")
+    if not original_request:
+        raise HTTPException(status_code=400, detail="Original request context missing")
+        
+    # Re-evaluate with current state (e.g., behavior metrics, policy ceilings)
+    gate_result = adapter.check(original_request)
+    if gate_result.get("verdict") != "ALLOW":
+        raise HTTPException(status_code=403, detail=f"Refresh denied. New verdict: {gate_result.get('verdict')}")
+        
+    return {
+        "allow_token": gate_result.get("allow_token"),
+        "audit_id": gate_result.get("audit_id"),
+        "status": "refreshed"
+    }
+
+
 @app.post("/orders")
 def create_order(req: CreateOrderRequest):
     """
@@ -266,6 +300,20 @@ def create_order(req: CreateOrderRequest):
     Links the resulting Razorpay order ID back to the originating audit decision.
     """
     try:
+        # Software-level Idempotency Guard
+        if req.audit_id:
+            record = get_decision_by_id(req.audit_id)
+            if record and record.get("razorpay_order_id"):
+                # Fetch existing order instead of creating a duplicate
+                existing_order = razorpay_client.fetch_order(record["razorpay_order_id"])
+                return {
+                    "status": "created",
+                    "order": existing_order,
+                    "audit_id": req.audit_id,
+                    "key_id": settings.razorpay_key_id,
+                    "idempotency_hit": True
+                }
+
         order_res = razorpay_client.create_gated_order(
             agent_id=req.agent_id,
             amount_paise=req.amount_paise,
@@ -273,6 +321,7 @@ def create_order(req: CreateOrderRequest):
             allow_token=req.allow_token,
             currency=req.currency,
             notes=req.notes,
+            idempotency_key=str(req.audit_id) if req.audit_id else None,
         )
 
         # Link Razorpay Order ID to audit ledger row if audit_id provided
@@ -285,6 +334,10 @@ def create_order(req: CreateOrderRequest):
             "audit_id": req.audit_id,
             "key_id": settings.razorpay_key_id,
         }
+    except razorpay_client.TokenExpiredError:
+        raise HTTPException(status_code=403, detail="token_expired")
+    except razorpay_client.TokenInvalidError:
+        raise HTTPException(status_code=403, detail="token_invalid")
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     except Exception as e:

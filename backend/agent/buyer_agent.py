@@ -388,6 +388,7 @@ class BuyerAgent:
                     f"Summary: {receipt.summary}\n"
                     f"Audit Decision ID: {receipt.audit_id}\n\n"
                     f"Provide a concise 1-2 sentence user-facing explanation of this outcome from the perspective of an autonomous AI Buyer Agent. "
+                    f"If evidence contains 'token_refreshed': true, mention that the token expired due to latency but was successfully refreshed before final execution. "
                     f"If verdict is BLOCK due to amount_exceeded_ceiling, state clearly that you found the matching option but RazorGate security policy ceiling (₹50,000.00) safely blocked execution, so no payment was made."
                 )
                 response = client.messages.create(
@@ -400,11 +401,15 @@ class BuyerAgent:
             except Exception:
                 pass
 
+        refresh_note = ""
+        if receipt.evidence and receipt.evidence.get("token_refreshed"):
+            refresh_note = " (Note: The transaction took longer than expected due to reasoning latency, but I successfully refreshed the expired security token before execution.)"
+
         if receipt.verdict == "ALLOW":
             order_id = receipt.order.get("id", "created") if receipt.order else "order_created"
             return (
                 f"Successfully authorized and placed order for '{receipt.sku}' at ₹{receipt.amount_inr:,.2f}. "
-                f"Razorpay Order ID: {order_id} (Audit Decision #{receipt.audit_id})."
+                f"Razorpay Order ID: {order_id} (Audit Decision #{receipt.audit_id}).{refresh_note}"
             )
         elif receipt.verdict == "BLOCK" and receipt.primary_factor == "amount_exceeded_ceiling":
             return (

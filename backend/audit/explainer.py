@@ -16,6 +16,7 @@ def build_explanation(
     apiris_score: Optional[Dict[str, Any]] = None,
     behavior_signal: Optional[Dict[str, Any]] = None,
     currency: str = "INR",
+    payment_call: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Template-rendered decision explanation generator.
@@ -91,6 +92,7 @@ def build_explanation(
             "reasons": policy_reasons,
             "amount_inr": amount_inr,
         },
+        "request": payment_call or {},
     }
 
     return {

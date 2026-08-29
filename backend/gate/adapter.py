@@ -236,6 +236,7 @@ def check(payment_call: dict) -> GateResult:
         apiris_score=apiris_summary,
         behavior_signal=behavior_signal,
         currency=currency,
+        payment_call=payment_call,
     )
 
     # 5. Mint short-lived ALLOW token if verdict is ALLOW

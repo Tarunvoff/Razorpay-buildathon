@@ -12,6 +12,12 @@ from typing import Any, Dict, Optional
 import razorpay
 from backend.config import settings
 
+class TokenInvalidError(PermissionError):
+    pass
+
+class TokenExpiredError(PermissionError):
+    pass
+
 # Initialize official Razorpay SDK client with credentials
 client = razorpay.Client(auth=(settings.razorpay_key_id, settings.razorpay_key_secret))
 
@@ -43,34 +49,38 @@ def verify_allow_token(
     agent_id: str,
     amount_paise: int,
     receipt: str,
-    max_age_seconds: float = 30.0,
+    max_age_seconds: float = 90.0,
     current_time: Optional[float] = None,
 ) -> bool:
     """
     Verifies that the ALLOW token:
     1. Has valid format {timestamp}.{signature}
-    2. Was generated within the allowable TTL window (default: 30s)
-    3. Matches HMAC signature over (agent_id, amount_paise, receipt, timestamp)
+    2. Matches HMAC signature over (agent_id, amount_paise, receipt, timestamp)
+    3. Was generated within the allowable TTL window (default: 90s)
     """
     if not token or "." not in token:
-        return False
+        raise TokenInvalidError("Invalid token format")
 
     try:
         ts_str, sig = token.split(".", 1)
         ts = int(ts_str)
     except Exception:
-        return False
+        raise TokenInvalidError("Invalid token format")
 
     now = current_time if current_time is not None else time.time()
-    # Check TTL and guard against clock skew (> 5s in the future)
-    if (now - ts) > max_age_seconds or ts > (now + 5.0):
-        return False
 
     secret = get_token_secret().encode("utf-8")
     payload = f"{agent_id}:{amount_paise}:{receipt}:{ts}".encode("utf-8")
     expected_sig = hmac.new(secret, payload, hashlib.sha256).hexdigest()
 
-    return hmac.compare_digest(sig, expected_sig)
+    if not hmac.compare_digest(sig, expected_sig):
+        raise TokenInvalidError("Invalid token signature")
+
+    # Check TTL and guard against clock skew (> 5s in the future)
+    if (now - ts) > max_age_seconds or ts > (now + 5.0):
+        raise TokenExpiredError("Token expired")
+
+    return True
 
 
 def create_order(
@@ -78,6 +88,7 @@ def create_order(
     receipt: str,
     currency: str = "INR",
     notes: Optional[Dict[str, Any]] = None,
+    idempotency_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Executes real Razorpay Orders API call in test mode.
@@ -89,7 +100,12 @@ def create_order(
     }
     if notes:
         order_data["notes"] = notes
-    return client.order.create(order_data)
+        
+    kwargs = {}
+    if idempotency_key:
+        kwargs["headers"] = {"X-Idempotency-Key": idempotency_key}
+        
+    return client.order.create(order_data, **kwargs)
 
 
 def create_gated_order(
@@ -99,26 +115,25 @@ def create_gated_order(
     allow_token: str,
     currency: str = "INR",
     notes: Optional[Dict[str, Any]] = None,
+    idempotency_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Gated order creation: validates the server-issued ALLOW token before calling Razorpay.
-    Raises PermissionError if token is invalid, forged, or expired.
+    Raises TokenInvalidError or TokenExpiredError if token is invalid, forged, or expired.
     """
-    if not verify_allow_token(
+    verify_allow_token(
         token=allow_token,
         agent_id=agent_id,
         amount_paise=amount_paise,
         receipt=receipt,
-    ):
-        raise PermissionError(
-            "Forbidden: Razorpay order creation requires a valid, unexpired server-issued ALLOW token."
-        )
+    )
 
     return create_order(
         amount_paise=amount_paise,
         receipt=receipt,
         currency=currency,
         notes=notes,
+        idempotency_key=idempotency_key,
     )
 
 

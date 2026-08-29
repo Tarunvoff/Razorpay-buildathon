@@ -10,6 +10,7 @@ via load_policy_config() to prevent threshold drift across files.
 from dataclasses import dataclass
 import math
 from pathlib import Path
+import threading
 import time
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 import yaml
@@ -90,6 +91,7 @@ class BehaviorAnalyzer:
         self.frequency_threshold = frequency_threshold if frequency_threshold is not None else cfg_freq
         self.std_dev_threshold = std_dev_threshold if std_dev_threshold is not None else cfg_std
         self.store = store if store is not None else InMemoryWindowStore()
+        self._lock = threading.Lock()
 
     def record_and_evaluate(
         self,
@@ -115,56 +117,57 @@ class BehaviorAnalyzer:
                 - window_mean_amount: float
                 - window_std_amount: float
         """
-        now = timestamp if timestamp is not None else time.time()
-        cutoff = now - self.window_seconds
-
-        # 1. Evict events outside rolling window
-        self.store.evict(agent_id, cutoff)
-
-        # 2. Retrieve prior window history before appending current call
-        prior_events = self.store.get(agent_id)
-        prior_amounts = [amt for (_, amt) in prior_events]
-        prior_count = len(prior_amounts)
-
-        # 3. Compute baseline statistics from prior events
-        if prior_count >= 2:
-            prior_mean = sum(prior_amounts) / prior_count
-            sample_variance = sum((x - prior_mean) ** 2 for x in prior_amounts) / prior_count
-            sample_std = math.sqrt(sample_variance)
-            # Minimum variance scale floor (5% of mean) to avoid division by zero
-            effective_std = max(sample_std, 0.05 * prior_mean if prior_mean > 0 else 1.0)
-            z_score = abs(amount_paise - prior_mean) / effective_std
-        else:
-            prior_mean = float(amount_paise)
-            effective_std = 0.0
-            z_score = 0.0
-
-        # 4. Append current event and retrieve full window state
-        self.store.append(agent_id, now, amount_paise)
-        all_events = self.store.get(agent_id)
-        call_count = len(all_events)
-        all_amounts = [amt for (_, amt) in all_events]
-        window_mean = sum(all_amounts) / call_count
-        window_std = math.sqrt(sum((x - window_mean) ** 2 for x in all_amounts) / call_count)
-
-        # 5. Evaluate the two exact flag criteria
-        reasons: List[str] = []
-        if call_count > self.frequency_threshold:
-            reasons.append("high_frequency")
-        if prior_count >= 2 and z_score > self.std_dev_threshold:
-            reasons.append("amount_deviation")
-
-        is_flagged = len(reasons) > 0
-
-        return {
-            "flag": is_flagged,
-            "reasons": reasons,
-            "session_call_count": call_count,
-            "frequency": call_count,
-            "amount_deviation_zscore": round(z_score, 2),
-            "window_mean_amount": round(window_mean, 2),
-            "window_std_amount": round(window_std, 2),
-        }
+        with self._lock:
+            now = timestamp if timestamp is not None else time.time()
+            cutoff = now - self.window_seconds
+    
+            # 1. Evict events outside rolling window
+            self.store.evict(agent_id, cutoff)
+    
+            # 2. Retrieve prior window history before appending current call
+            prior_events = self.store.get(agent_id)
+            prior_amounts = [amt for (_, amt) in prior_events]
+            prior_count = len(prior_amounts)
+    
+            # 3. Compute baseline statistics from prior events
+            if prior_count >= 2:
+                prior_mean = sum(prior_amounts) / prior_count
+                sample_variance = sum((x - prior_mean) ** 2 for x in prior_amounts) / prior_count
+                sample_std = math.sqrt(sample_variance)
+                # Minimum variance scale floor (5% of mean) to avoid division by zero
+                effective_std = max(sample_std, 0.05 * prior_mean if prior_mean > 0 else 1.0)
+                z_score = abs(amount_paise - prior_mean) / effective_std
+            else:
+                prior_mean = float(amount_paise)
+                effective_std = 0.0
+                z_score = 0.0
+    
+            # 4. Append current event and retrieve full window state
+            self.store.append(agent_id, now, amount_paise)
+            all_events = self.store.get(agent_id)
+            call_count = len(all_events)
+            all_amounts = [amt for (_, amt) in all_events]
+            window_mean = sum(all_amounts) / call_count
+            window_std = math.sqrt(sum((x - window_mean) ** 2 for x in all_amounts) / call_count)
+    
+            # 5. Evaluate the two exact flag criteria
+            reasons: List[str] = []
+            if call_count > self.frequency_threshold:
+                reasons.append("high_frequency")
+            if prior_count >= 2 and z_score > self.std_dev_threshold:
+                reasons.append("amount_deviation")
+    
+            is_flagged = len(reasons) > 0
+    
+            return {
+                "flag": is_flagged,
+                "reasons": reasons,
+                "session_call_count": call_count,
+                "frequency": call_count,
+                "amount_deviation_zscore": round(z_score, 2),
+                "window_mean_amount": round(window_mean, 2),
+                "window_std_amount": round(window_std, 2),
+            }
 
 
 # Global default analyzer instance

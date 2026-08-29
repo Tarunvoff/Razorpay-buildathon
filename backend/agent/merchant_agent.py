@@ -211,6 +211,46 @@ class MerchantAgent:
                 # Link Razorpay Order ID to audit ledger row
                 if "id" in razorpay_order:
                     link_order_to_decision(audit_id=row_id, razorpay_order_id=razorpay_order["id"])
+            except razorpay_client.TokenExpiredError:
+                # Token expired due to agent latency. Execute exactly one retry via refresh path.
+                try:
+                    refresh_result = adapter.check(payment_call)
+                    new_verdict = refresh_result.get("verdict", "BLOCK")
+                    if new_verdict == "ALLOW" and refresh_result.get("allow_token"):
+                        razorpay_order = razorpay_client.create_gated_order(
+                            agent_id=mandate.buyer_agent_id,
+                            amount_paise=mandate.amount_paise,
+                            receipt=mandate.receipt_ref,
+                            allow_token=refresh_result["allow_token"],
+                            currency=mandate.currency,
+                            notes={
+                                "sku": mandate.sku,
+                                "mandate_id": mandate.mandate_id,
+                                "audit_id": refresh_result.get("audit_id", row_id),
+                                "merchant_id": self.merchant_id,
+                            },
+                        )
+                        if "id" in razorpay_order:
+                            link_order_to_decision(audit_id=refresh_result.get("audit_id", row_id), razorpay_order_id=razorpay_order["id"])
+                        
+                        verdict = new_verdict
+                        confidence = refresh_result.get("confidence", 1.0)
+                        primary_factor = refresh_result.get("primary_factor", "unknown")
+                        summary = refresh_result.get("summary", "")
+                        row_id = refresh_result.get("audit_id", row_id)
+                        explanation_record = refresh_result.get("explanation_record", {})
+                        
+                        if "evidence" not in explanation_record:
+                            explanation_record["evidence"] = {}
+                        explanation_record["evidence"]["token_refreshed"] = True
+                    else:
+                        verdict = new_verdict
+                        confidence = refresh_result.get("confidence", 1.0)
+                        primary_factor = refresh_result.get("primary_factor", "unknown")
+                        summary = f"Token expired and refresh denied: {refresh_result.get('summary', '')}"
+                except Exception as e:
+                    exec_error = str(e)
+                    summary = f"Token expired and refresh execution failed: {str(e)}"
             except Exception as e:
                 exec_error = str(e)
                 summary = f"Gate ALLOWed but order execution failed: {str(e)}"
