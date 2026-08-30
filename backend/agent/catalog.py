@@ -97,6 +97,24 @@ DEFAULT_CATALOG: List[Dict[str, Any]] = [
 
     # 3. Cloud Storage & Infrastructure
     {
+        "sku": "storage-object-starter-100gb",
+        "name": "Starter S3-Compatible Object Storage Bucket (100GB/mo)",
+        "description": "Fast, low-latency S3 object storage bucket for side projects, web asset hosting, and media APIs.",
+        "category": "cloud_storage",
+        "amount_paise": 19900,  # ₹199.00
+        "unit": "month",
+        "specs": {"capacity_gb": 100, "latency": "instant_http", "egress_cost": "free"},
+    },
+    {
+        "sku": "storage-object-starter-500gb",
+        "name": "Standard S3-Compatible Object Storage Bucket (500GB/mo)",
+        "description": "High-speed object storage bucket for developer projects, app media, and database backups.",
+        "category": "cloud_storage",
+        "amount_paise": 49000,  # ₹490.00
+        "unit": "month",
+        "specs": {"capacity_gb": 500, "latency": "instant_http", "egress_cost": "free"},
+    },
+    {
         "sku": "storage-object-s3-10tb",
         "name": "High-Performance S3-Compatible Object Storage (10TB/mo)",
         "description": "Low-latency object storage for side projects, datasets, and web asset hosting with zero egress fees.",
@@ -267,6 +285,14 @@ def score_item_relevance(item: Dict[str, Any], q_words: List[str], cat_lower: st
             score += 3.0
         if word in item_cat:
             score += 2.0
+
+    # Object storage vs Cold Glacier Archival tier domain weighting
+    q_str = " ".join(q_words)
+    if ("object" in q_str or "bucket" in q_str or "side" in q_str or "project" in q_str) and "cloud_storage" in item_cat:
+        if "object" in item_sku or "starter" in item_sku:
+            score += 8.0  # Active object storage bucket
+        elif "glacier" in item_sku or "archive" in item_sku:
+            score -= 4.0  # Cold long-term compliance archive
 
     return score
 

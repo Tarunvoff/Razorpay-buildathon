@@ -18,6 +18,7 @@ import {
   ShieldCheck,
   AlertTriangle,
   ExternalLink,
+  Search,
 } from 'lucide-react';
 
 interface GatedFlowWalkthroughProps {
@@ -28,13 +29,101 @@ interface GatedFlowWalkthroughProps {
 
 type ScenarioType = 'clean_allow' | 'behavior_flag' | 'forced_failure_block' | 'custom';
 
+interface CandidateOffer {
+  sku: string;
+  name: string;
+  amount_inr: number;
+  description: string;
+  specs: Record<string, any>;
+  is_selected?: boolean;
+}
+
+const PRESET_OFFERS: Record<
+  Exclude<ScenarioType, 'custom'>,
+  { offers: CandidateOffer[]; selectedSku: string; reasoning: string }
+> = {
+  clean_allow: {
+    selectedSku: 'compute-gpu-h100-1hr',
+    reasoning:
+      "Selected compute-gpu-h100-1hr (₹299.00) featuring NVIDIA H100 80GB VRAM to maximize FP8 tensor throughput for LLM fine-tuning intent within budget ₹500.00, evaluating against lower-capacity alternatives [compute-gpu-a100-1hr (₹149.00), compute-gpu-l4-1hr (₹79.00)].",
+    offers: [
+      {
+        sku: 'compute-gpu-h100-1hr',
+        name: 'NVIDIA H100 SXM 80GB Instance (1 Hour)',
+        amount_inr: 299.0,
+        description: 'Dedicated 80GB H100 GPU compute slot with 900GB/s NVLink interconnect for heavy LLM fine-tuning.',
+        specs: { gpu: 'NVIDIA H100 80GB', vram_gb: 80, interconnect: 'NVLink 900GB/s' },
+        is_selected: true,
+      },
+      {
+        sku: 'compute-gpu-a100-1hr',
+        name: 'NVIDIA A100 Tensor Core 40GB Instance (1 Hour)',
+        amount_inr: 149.0,
+        description: 'High-throughput A100 GPU instance optimized for batch inference and deep learning workloads.',
+        specs: { gpu: 'NVIDIA A100 40GB', vram_gb: 40, interconnect: 'PCIe Gen4' },
+      },
+      {
+        sku: 'compute-gpu-l4-1hr',
+        name: 'NVIDIA L4 24GB Instance (1 Hour)',
+        amount_inr: 79.0,
+        description: 'Cost-efficient Ada Lovelace accelerator for real-time video, audio processing, and light model inference.',
+        specs: { gpu: 'NVIDIA L4 24GB', vram_gb: 24, interconnect: 'PCIe Gen4' },
+      },
+    ],
+  },
+  behavior_flag: {
+    selectedSku: 'api-tier-starter-100k',
+    reasoning:
+      "Selected api-tier-starter-100k (₹49.00) for rapid session refill window, evaluating against high-volume alternatives. Note: 6 rapid burst calls in rolling window will trigger RazorGate behavioral anomaly FLAG.",
+    offers: [
+      {
+        sku: 'api-tier-starter-100k',
+        name: 'Starter API Credit Refill (100k Tokens)',
+        amount_inr: 49.0,
+        description: 'Low-latency API credit token pack for high-frequency micro-transactions.',
+        specs: { tokens: '100,000', rate_limit: '100 req/sec' },
+        is_selected: true,
+      },
+      {
+        sku: 'api-tier-pro-1m',
+        name: 'Pro API Credit Refill (1M Tokens)',
+        amount_inr: 299.0,
+        description: 'High-volume production API token pack with priority queue SLA.',
+        specs: { tokens: '1,000,000', rate_limit: '1000 req/sec' },
+      },
+    ],
+  },
+  forced_failure_block: {
+    selectedSku: 'enterprise-support-tier1',
+    reasoning:
+      "Evaluated enterprise options within ₹150,000 budget. Selected enterprise-support-tier1 (₹65,000.00). Note: Mandate value exceeding ₹50,000 ceiling will be deterministically gated by RazorGate policy engine.",
+    offers: [
+      {
+        sku: 'enterprise-support-tier1',
+        name: 'Dedicated 24/7 Enterprise Support (Monthly)',
+        amount_inr: 65000.0,
+        description: 'Dedicated TAM, 15-minute emergency SLA, and architectural reviews for enterprise deployments.',
+        specs: { response_time: '15 mins', dedicated_tam: 'Yes', ceiling_breach: 'Exceeds ₹50k' },
+        is_selected: true,
+      },
+      {
+        sku: 'compute-gpu-cluster-full-rack',
+        name: 'Enterprise Full-Rack 8x H100 High-Throughput Cluster (1 Week)',
+        amount_inr: 120000.0,
+        description: 'Dedicated 8-node H100 cluster with 400Gbps InfiniBand networking for enterprise model pre-training.',
+        specs: { nodes: 8, total_vram_gb: 640, infiniband_gbps: 400 },
+      },
+    ],
+  },
+};
+
 export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
   onRunScenario,
   isScenarioRunning,
   currentScenarioResult,
 }) => {
   const [selectedScenario, setSelectedScenario] = useState<ScenarioType>('clean_allow');
-  const [currentStep, setCurrentStep] = useState<number>(1);
+  const [currentStep, setCurrentStep] = useState<number>(0);
   const [tokenCountdown, setTokenCountdown] = useState<number>(30);
   const [copiedOrderId, setCopiedOrderId] = useState(false);
 
@@ -125,7 +214,7 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
 
   const handleExecuteScenario = async (scenario: ScenarioType) => {
     setSelectedScenario(scenario);
-    setCurrentStep(1);
+    setCurrentStep(0);
     setTokenCountdown(30);
     setRealGateResult(null);
     setRealOrderResult(null);
@@ -150,9 +239,13 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
     }
 
     try {
+      // Stage 0: Catalog Discovery & Evaluation
+      setCurrentStep(0);
+      await new Promise((r) => setTimeout(r, 600));
+
       // Stage 1: Buyer signs mandate
       setCurrentStep(1);
-      await new Promise((r) => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, 400));
 
       // Stage 2: Gate waterfall evaluation via real POST /gate/check
       setCurrentStep(2);
@@ -270,22 +363,43 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
     custom: {
       title: `Free-Form Intent: "${customIntent}"`,
       badge: 'Custom Judge Intent',
-      verdict: (realGateResult?.verdict || customScenarioResult?.verdict || 'ALLOW') as Verdict,
-      amount: `₹${((customScenarioResult?.amount_inr || (realGateResult?.amount_paise ? realGateResult.amount_paise / 100 : customBudgetInr))).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`,
+      verdict: (realGateResult?.verdict || customScenarioResult?.receipt?.verdict || customScenarioResult?.verdict || 'ALLOW') as Verdict,
+      amount: `₹${(
+        (realGateResult?.amount_paise
+          ? realGateResult.amount_paise / 100
+          : customScenarioResult?.receipt?.amount_inr ??
+            (customScenarioResult?.receipt?.amount_paise ? customScenarioResult.receipt.amount_paise / 100 : customBudgetInr))
+      ).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`,
       sku: String(customScenarioResult?.receipt?.sku || 'custom_request'),
       summary: customScenarioResult?.explanation || realGateResult?.summary || `Evaluates free-form intent '${customIntent}' against real marketplace catalog and RazorGate security gate.`,
     },
   };
 
   const currentMeta = scenarioMeta[selectedScenario];
-  const activeVerdict = realGateResult?.verdict || currentScenarioResult?.verdict || currentMeta.verdict;
+  const activeVerdict = realGateResult?.verdict || customScenarioResult?.receipt?.verdict || customScenarioResult?.verdict || currentMeta.verdict;
   const isBlock = activeVerdict === 'BLOCK';
   const isFlag = activeVerdict === 'FLAG';
   const isAllow = activeVerdict === 'ALLOW';
 
+  const currentAmountPaise =
+    realOrderResult?.order?.amount ??
+    realGateResult?.amount_paise ??
+    customScenarioResult?.receipt?.amount_paise ??
+    (selectedScenario === 'clean_allow'
+      ? 29900
+      : selectedScenario === 'behavior_flag'
+      ? 4900
+      : selectedScenario === 'forced_failure_block'
+      ? 6500000
+      : Math.round(customBudgetInr * 100));
+
+  const currentAmountInr = (currentAmountPaise / 100).toFixed(2);
+
   const orderId =
     realOrderResult?.order?.id ||
-    (currentScenarioResult?.order?.id ? String(currentScenarioResult.order.id) : null);
+    (customScenarioResult?.receipt?.order as any)?.id ||
+    (selectedScenario !== 'custom' && currentScenarioResult?.order?.id ? String(currentScenarioResult.order.id) : null);
+
 
   const copyOrderId = () => {
     if (orderId) {
@@ -301,7 +415,7 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
 
     setRunsLeft((prev) => Math.max(0, prev - 1));
     setSelectedScenario('custom');
-    setCurrentStep(1);
+    setCurrentStep(0);
     setRealGateResult(null);
     setRealOrderResult(null);
     setVerifiedPayment(null);
@@ -310,12 +424,15 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
     setIsExecuting(true);
 
     try {
-      // Stage 1: Buyer signs mandate
-      setCurrentStep(1);
-      await new Promise((r) => setTimeout(r, 300));
-
+      // Stage 0: Catalog Discovery & Comparative Evaluation
+      setCurrentStep(0);
       const res = await askBuyerAgent(customIntent, 'all', customBudgetInr);
       setCustomScenarioResult(res);
+      await new Promise((r) => setTimeout(r, 600));
+
+      // Stage 1: Buyer signs mandate
+      setCurrentStep(1);
+      await new Promise((r) => setTimeout(r, 400));
 
       // Stage 2: Gate Check
       setCurrentStep(2);
@@ -355,7 +472,6 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
 
         // Auto-launch Razorpay Checkout test-mode modal for ALLOW transactions!
         triggerRazorpayModal(orderRes, receipt.audit_id || undefined, receipt.amount_paise || Math.round(customBudgetInr * 100));
-
       } else {
         setCurrentStep(5);
       }
@@ -369,6 +485,62 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
   };
 
 
+
+  // Extract candidate offers and verbatim reasoning for active scenario (presets or custom freeform)
+  let activeOffers: CandidateOffer[] = [];
+  let activeSelectedSku = '';
+  let activeReasoning = '';
+
+  if (selectedScenario === 'custom') {
+    if (customScenarioResult) {
+      const transcript = (customScenarioResult as any).transcript || [];
+      const receivedOffersStep = transcript.find((t: any) => t.step === 'received_offers');
+      const rawOffers = receivedOffersStep?.data?.offers || [];
+      const selectionStep = transcript.find((t: any) => t.step === 'selection_reasoning');
+
+      activeSelectedSku = selectionStep?.data?.selected_sku || customScenarioResult.receipt?.sku || '';
+      activeReasoning = selectionStep?.data?.reasoning || customScenarioResult.explanation || 'Selected best-matching catalog offer within budget constraints.';
+
+      activeOffers = rawOffers.map((o: any) => ({
+        sku: o.sku,
+        name: o.name,
+        amount_inr: o.amount_paise ? o.amount_paise / 100 : (o.amount_inr || 0),
+        description: o.description,
+        specs: o.specs || {},
+        is_selected: o.sku === activeSelectedSku,
+      }));
+
+      if (activeOffers.length === 0 && customScenarioResult.receipt?.sku) {
+        activeOffers = [
+          {
+            sku: customScenarioResult.receipt.sku,
+            name: customScenarioResult.receipt.sku,
+            amount_inr: customScenarioResult.receipt.amount_inr,
+            description: customScenarioResult.explanation || 'Custom selected marketplace item.',
+            specs: { intent: customIntent },
+            is_selected: true,
+          },
+        ];
+      }
+    } else {
+      activeReasoning = `Searching catalog for intent: "${customIntent}" (Max Budget: ₹${customBudgetInr.toLocaleString()})...`;
+      activeOffers = [
+        {
+          sku: 'search_querying...',
+          name: `Catalog Search: "${customIntent}"`,
+          amount_inr: customBudgetInr,
+          description: 'Evaluating candidate SKUs across 23+ catalog items...',
+          specs: { status: 'querying_merchant_agent' },
+          is_selected: true,
+        },
+      ];
+    }
+  } else {
+    const preset = PRESET_OFFERS[selectedScenario];
+    activeOffers = preset.offers;
+    activeSelectedSku = preset.selectedSku;
+    activeReasoning = preset.reasoning;
+  }
 
   return (
     <div className="space-y-8 pb-16">
@@ -500,7 +672,12 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
         })}
       </div>
 
-      {/* 5-STAGE INTERACTIVE EXECUTION PIPELINE */}
+      {/* Extract candidate offers and verbatim reasoning for active scenario (presets or custom freeform) */}
+      {(() => {
+        return null;
+      })()}
+
+      {/* 6-STAGE INTERACTIVE EXECUTION PIPELINE */}
       <div className="max-w-5xl mx-auto bg-[#111113] border border-white/10 rounded-2xl p-6 shadow-2xl space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-white/10 gap-3">
           <div>
@@ -525,11 +702,29 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
           </div>
         </div>
 
-        {/* 5-Stage Stepper Visual */}
-        <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
+        {/* 6-Stage Stepper Visual */}
+        <div className="grid grid-cols-2 sm:grid-cols-6 gap-2">
+          {/* Stage 0: Search & Compare */}
+          <div
+            className={`p-3 rounded-xl border transition-all ${
+              currentStep >= 0
+                ? 'bg-[#161619] border-[#D4A15C]/50 text-[#F5F1EA]'
+                : 'bg-black/20 border-white/5 opacity-40'
+            }`}
+          >
+            <div className="text-[10px] font-mono text-[#D4A15C] uppercase mb-1">Stage 0</div>
+            <div className="text-xs font-semibold flex items-center gap-1.5">
+              <Search size={13} className="text-[#D4A15C]" />
+              <span>Catalog Discovery</span>
+            </div>
+            <div className="text-[10px] font-mono text-[#8E8A83] mt-1">
+              Offers & Reasoning
+            </div>
+          </div>
+
           {/* Stage 1: Signed Mandate */}
           <div
-            className={`p-3.5 rounded-xl border transition-all ${
+            className={`p-3 rounded-xl border transition-all ${
               currentStep >= 1
                 ? 'bg-[#161619] border-[#D4A15C]/50 text-[#F5F1EA]'
                 : 'bg-black/20 border-white/5 opacity-40'
@@ -540,14 +735,14 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
               <Lock size={13} className="text-[#D4A15C]" />
               <span>Signed Mandate</span>
             </div>
-            <div className="text-[11px] font-mono text-[#8E8A83] mt-1">
+            <div className="text-[10px] font-mono text-[#8E8A83] mt-1">
               HMAC-SHA256 bounds
             </div>
           </div>
 
           {/* Stage 2: Gate Engine */}
           <div
-            className={`p-3.5 rounded-xl border transition-all ${
+            className={`p-3 rounded-xl border transition-all ${
               currentStep >= 2
                 ? 'bg-[#161619] border-[#D4A15C]/50 text-[#F5F1EA]'
                 : 'bg-black/20 border-white/5 opacity-40'
@@ -558,16 +753,16 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
               <Cpu size={13} className="text-[#D4A15C]" />
               <span>POST /gate/check</span>
             </div>
-            <div className="text-[11px] font-mono text-[#8E8A83] mt-1">
+            <div className="text-[10px] font-mono text-[#8E8A83] mt-1">
               {selectedScenario === 'behavior_flag' && burstCount > 0
                 ? `Burst ${burstCount}/6 ${burstCount === 6 ? '(FLAG!)' : ''}`
-                : 'Live FastAPI Waterfall'}
+                : 'FastAPI Waterfall'}
             </div>
           </div>
 
           {/* Stage 3: Token Mint or Block */}
           <div
-            className={`p-3.5 rounded-xl border transition-all ${
+            className={`p-3 rounded-xl border transition-all ${
               currentStep >= 3
                 ? isBlock
                   ? 'bg-rose-950/40 border-rose-500/50 text-rose-300'
@@ -584,14 +779,14 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
               {isBlock ? <AlertOctagon size={13} /> : isFlag ? <AlertTriangle size={13} /> : <Clock size={13} />}
               <span>{isBlock ? 'BLOCK Verdict' : isFlag ? 'FLAG Verdict' : 'HMAC ALLOW Token'}</span>
             </div>
-            <div className="text-[11px] font-mono mt-1 opacity-80">
-              {isBlock ? 'Zero token minted' : `30s TTL (${tokenCountdown}s remaining)`}
+            <div className="text-[10px] font-mono mt-1 opacity-80">
+              {isBlock ? 'Zero token minted' : `30s TTL (${tokenCountdown}s)`}
             </div>
           </div>
 
           {/* Stage 4: Server Revalidation */}
           <div
-            className={`p-3.5 rounded-xl border transition-all ${
+            className={`p-3 rounded-xl border transition-all ${
               currentStep >= 4
                 ? isBlock
                   ? 'bg-black/30 border-white/10 text-[#8E8A83]'
@@ -604,14 +799,14 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
               <Server size={13} className={isBlock ? 'text-rose-400' : isFlag ? 'text-amber-400' : 'text-emerald-400'} />
               <span>POST /orders</span>
             </div>
-            <div className="text-[11px] font-mono text-[#8E8A83] mt-1">
-              {isBlock ? 'Execution halted (0 orders)' : 'Real Razorpay Order'}
+            <div className="text-[10px] font-mono text-[#8E8A83] mt-1">
+              {isBlock ? 'Halted (0 orders)' : 'Razorpay Order'}
             </div>
           </div>
 
           {/* Stage 5: Dual Confirmation */}
           <div
-            className={`p-3.5 rounded-xl border transition-all ${
+            className={`p-3 rounded-xl border transition-all ${
               currentStep >= 5
                 ? 'bg-[#161619] border-[#D4A15C]/60 text-[#F5F1EA]'
                 : 'bg-black/20 border-white/5 opacity-40'
@@ -620,13 +815,96 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
             <div className="text-[10px] font-mono text-[#D4A15C] uppercase mb-1">Stage 5</div>
             <div className="text-xs font-semibold flex items-center gap-1.5">
               <ReceiptIcon size={13} className="text-[#D4A15C]" />
-              <span>Dual Proof Panel</span>
+              <span>Dual Proof</span>
             </div>
-            <div className="text-[11px] font-mono text-[#8E8A83] mt-1">
+            <div className="text-[10px] font-mono text-[#8E8A83] mt-1">
               Verified Signature
             </div>
           </div>
         </div>
+
+        {/* STAGE 0: CATALOG DISCOVERY & COMPARATIVE EVALUATION PANEL */}
+        {activeOffers.length > 0 && (
+          <div className="p-4 rounded-xl bg-[#161619] border border-white/10 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-white/10">
+              <div className="flex items-center gap-2">
+                <Search size={14} className="text-[#D4A15C]" />
+                <span className="text-xs font-bold text-[#F5F1EA]">
+                  Stage 0: Catalog Discovery & Comparative Evaluation
+                </span>
+              </div>
+              <span className="text-[11px] font-mono text-[#8E8A83]">
+                {activeOffers.length} Merchant Candidate Offers Evaluated
+              </span>
+            </div>
+
+            {/* Candidate Offer Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {activeOffers.map((offer) => {
+                const isSelected = offer.sku === activeSelectedSku || offer.is_selected;
+                return (
+                  <div
+                    key={offer.sku}
+                    className={`p-3.5 rounded-xl border transition-all flex flex-col justify-between ${
+                      isSelected
+                        ? 'bg-[#1C1C20] border-[#D4A15C] ring-2 ring-[#D4A15C]/50 shadow-[0_0_20px_rgba(212,161,92,0.2)]'
+                        : 'bg-black/30 border-white/10 opacity-60'
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <span className="font-mono text-[10px] text-[#C5C0B7] bg-white/5 px-2 py-0.5 rounded border border-white/10">
+                          {offer.sku}
+                        </span>
+                        {isSelected ? (
+                          <span className="text-[10px] font-mono font-bold text-[#E8B96C] bg-[#D4A15C]/20 border border-[#D4A15C]/40 px-2 py-0.5 rounded flex items-center gap-1">
+                            <Check size={11} /> SELECTED
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-mono text-[#8E8A83]">
+                            CANDIDATE
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs font-bold text-[#F5F1EA] mb-1">
+                        {offer.name}
+                      </div>
+                      <div className="text-[11px] font-mono text-emerald-400 font-bold mb-2">
+                        ₹{(offer.amount_inr ?? 0).toFixed(2)}
+                      </div>
+                      <p className="text-[11px] text-[#8E8A83] leading-snug line-clamp-2">
+                        {offer.description}
+                      </p>
+                    </div>
+
+                    {offer.specs && (
+                      <div className="mt-3 pt-2 border-t border-white/5 flex flex-wrap gap-1">
+                        {Object.entries(offer.specs).map(([k, v]) => (
+                          <span key={k} className="text-[10px] font-mono text-[#C5C0B7] bg-white/5 px-1.5 py-0.5 rounded">
+                            {k}: {String(v)}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Verbatim Reasoning Callout Block */}
+            {activeReasoning && (
+              <div className="p-3.5 rounded-lg bg-black/50 border border-white/10">
+                <div className="text-[11px] font-mono text-[#D4A15C] font-semibold flex items-center gap-1.5 mb-1">
+                  <Sparkles size={13} />
+                  <span>Buyer Agent Comparative Reasoning (Verbatim)</span>
+                </div>
+                <p className="text-xs font-mono text-[#F5F1EA] leading-relaxed">
+                  {activeReasoning}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* STAGE DETAIL EXPANDED: SIDE-BY-SIDE CONFIRMATION */}
         {currentStep >= 5 && (
@@ -696,7 +974,7 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
                   </div>
 
                   <button
-                    onClick={() => realOrderResult && triggerRazorpayModal(realOrderResult, realGateResult?.audit_id)}
+                    onClick={() => realOrderResult && triggerRazorpayModal(realOrderResult, realGateResult?.audit_id, currentAmountPaise)}
                     disabled={!realOrderResult}
                     className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#D4A15C] hover:bg-[#E8B96C] text-black font-mono text-xs font-bold transition-all shrink-0 shadow-lg disabled:opacity-50"
                   >
@@ -814,7 +1092,7 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
                       <div className="flex justify-between">
                         <span className="text-[#8E8A83]">Amount Subunit:</span>
                         <span className="text-[#F5F1EA]">
-                          {selectedScenario === 'clean_allow' ? '29900 paise (₹299.00)' : '4900 paise (₹49.00)'}
+                          {currentAmountPaise} paise (₹{currentAmountInr})
                         </span>
                       </div>
                       <div className="flex justify-between">

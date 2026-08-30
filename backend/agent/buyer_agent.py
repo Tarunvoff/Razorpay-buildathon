@@ -163,7 +163,7 @@ class BuyerAgent:
         # Try Real Claude API Tool / Completion call if API key present
         if self.api_key:
             try:
-                client = anthropic.Anthropic(api_key=self.api_key)
+                client = anthropic.Anthropic(api_key=self.api_key, timeout=5.0)
                 offers_summary = [
                     {
                         "sku": o.sku,
