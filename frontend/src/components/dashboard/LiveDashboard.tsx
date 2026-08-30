@@ -65,9 +65,9 @@ export const LiveDashboard: React.FC<LiveDashboardProps> = ({
         <div className="p-4 rounded-xl bg-[#111113] border border-white/10 flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-mono text-[#8E8A83]">Total Decisions</span>
-            <Activity size={13} className="text-[#D4A15C]" />
+            <Activity size={13} className="text-[#A39E93]" />
           </div>
-          <div className="text-2xl font-bold font-mono text-[#F5F1EA] mt-2 tabular-nums">
+          <div className="text-3xl font-extrabold font-mono text-[#F5F1EA] mt-2 tabular-nums">
             {total}
           </div>
           <div className="text-[10px] font-mono text-[#8E8A83] mt-1 flex items-center gap-1">
@@ -82,7 +82,7 @@ export const LiveDashboard: React.FC<LiveDashboardProps> = ({
             <span className="text-[11px] font-mono text-emerald-400">ALLOW (Cleared)</span>
             <ShieldCheck size={13} className="text-emerald-400" />
           </div>
-          <div className="text-2xl font-bold font-mono text-emerald-400 mt-2 tabular-nums">
+          <div className="text-3xl font-extrabold font-mono text-emerald-400 mt-2 tabular-nums">
             {allows}
           </div>
           <div className="text-[10px] font-mono text-[#8E8A83] mt-1">
@@ -96,7 +96,7 @@ export const LiveDashboard: React.FC<LiveDashboardProps> = ({
             <span className="text-[11px] font-mono text-amber-400">FLAG (Review)</span>
             <ShieldAlert size={13} className="text-amber-400" />
           </div>
-          <div className="text-2xl font-bold font-mono text-amber-400 mt-2 tabular-nums">
+          <div className="text-3xl font-extrabold font-mono text-amber-400 mt-2 tabular-nums">
             {flags}
           </div>
           <div className="text-[10px] font-mono text-[#8E8A83] mt-1">
@@ -110,7 +110,7 @@ export const LiveDashboard: React.FC<LiveDashboardProps> = ({
             <span className="text-[11px] font-mono text-rose-400">BLOCK (Gated)</span>
             <ShieldX size={13} className="text-rose-400" />
           </div>
-          <div className="text-2xl font-bold font-mono text-rose-400 mt-2 tabular-nums">
+          <div className="text-3xl font-extrabold font-mono text-rose-400 mt-2 tabular-nums">
             {blocks}
           </div>
           <div className="text-[10px] font-mono text-[#8E8A83] mt-1">
@@ -122,7 +122,7 @@ export const LiveDashboard: React.FC<LiveDashboardProps> = ({
         <div className="p-4 rounded-xl bg-[#111113] border border-white/10 flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-mono text-[#8E8A83]">p50 Latency</span>
-            <Zap size={13} className="text-[#D4A15C]" />
+            <Zap size={13} className="text-[#A39E93]" />
           </div>
           <div className="text-2xl font-bold font-mono text-[#F5F1EA] mt-2 tabular-nums">
             {metrics.apiris_specs.p50_latency_ms} <span className="text-xs font-normal text-[#8E8A83]">ms</span>
@@ -147,28 +147,33 @@ export const LiveDashboard: React.FC<LiveDashboardProps> = ({
         </div>
       </div>
 
-      {/* QUICK SCENARIO FIRER STRIP */}
+      {/* QUICK SCENARIO FIRER STRIP — UNAMBIGUOUS START HERE AFFORDANCE */}
       {onRunScenario && (
-        <div className="p-4 rounded-xl bg-[#161619] border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-[#D4A15C]/10 border border-[#D4A15C]/30 flex items-center justify-center text-[#E8B96C] shrink-0">
-              <Play size={14} />
+        <div className="p-4 rounded-xl bg-[#161619] border border-[#D4A15C]/60 ring-2 ring-[#D4A15C]/40 animate-pulse shadow-[0_0_25px_rgba(212,161,92,0.25)] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-[#D4A15C] flex items-center justify-center text-black font-bold shrink-0 shadow-md">
+              <Play size={16} className="fill-black" />
             </div>
             <div>
-              <div className="text-xs font-semibold text-[#F5F1EA]">
-                Judge Demo Trigger: Fire Scripted A2A Scenario
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold font-mono px-2 py-0.5 rounded bg-[#D4A15C]/20 border border-[#D4A15C]/40 text-[#F5F1EA] uppercase">
+                  START HERE
+                </span>
+                <span className="text-xs font-bold text-[#F5F1EA]">
+                  Judge Demo Trigger: Fire Scripted A2A Scenario
+                </span>
               </div>
-              <div className="text-[11px] text-[#8E8A83] font-mono">
+              <div className="text-[11px] text-[#C5C0B7] font-mono mt-0.5">
                 Executes live A2A transaction, pushes decision over SSE, and updates ledger.
               </div>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             <button
               onClick={() => onRunScenario('clean_allow')}
               disabled={isScenarioRunning}
-              className="px-3 py-1.5 rounded-md bg-emerald-950/60 hover:bg-emerald-900/60 border border-emerald-500/40 text-emerald-300 font-mono text-xs font-semibold transition-all disabled:opacity-50"
+              className="px-3.5 py-1.5 rounded-md bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/50 text-emerald-300 font-mono text-xs font-bold transition-all disabled:opacity-50 cursor-pointer shadow-sm"
             >
               1. Clean ALLOW (₹299)
             </button>
@@ -176,7 +181,7 @@ export const LiveDashboard: React.FC<LiveDashboardProps> = ({
             <button
               onClick={() => onRunScenario('behavior_flag')}
               disabled={isScenarioRunning}
-              className="px-3 py-1.5 rounded-md bg-amber-950/60 hover:bg-amber-900/60 border border-amber-500/40 text-amber-300 font-mono text-xs font-semibold transition-all disabled:opacity-50"
+              className="px-3.5 py-1.5 rounded-md bg-amber-950/80 hover:bg-amber-900 border border-amber-500/50 text-amber-300 font-mono text-xs font-bold transition-all disabled:opacity-50 cursor-pointer shadow-sm"
             >
               2. Behavioral FLAG (Burst)
             </button>
@@ -184,7 +189,7 @@ export const LiveDashboard: React.FC<LiveDashboardProps> = ({
             <button
               onClick={() => onRunScenario('forced_failure_block')}
               disabled={isScenarioRunning}
-              className="px-3 py-1.5 rounded-md bg-rose-950/60 hover:bg-rose-900/60 border border-rose-500/40 text-rose-300 font-mono text-xs font-semibold transition-all disabled:opacity-50"
+              className="px-3.5 py-1.5 rounded-md bg-rose-950/80 hover:bg-rose-900 border border-rose-500/50 text-rose-300 font-mono text-xs font-bold transition-all disabled:opacity-50 cursor-pointer shadow-sm"
             >
               3. Phase 8 BLOCK (&gt;₹50k)
             </button>

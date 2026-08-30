@@ -19,27 +19,27 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[700px] h-[350px] bg-[#D4A15C]/5 blur-[120px] rounded-full pointer-events-none" />
 
         <div className="max-w-5xl mx-auto text-center relative z-10 px-4">
-          {/* Track Badge */}
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#161619] border border-[#D4A15C]/30 text-xs font-mono text-[#E8B96C] mb-6">
-            <span className="w-2 h-2 rounded-full bg-[#D4A15C] animate-ping" />
-            <span>Razorpay Buildathon — Track 01 Submission</span>
+          {/* Start Here Judge Affordance Badge */}
+          <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-[#D4A15C]/10 border border-[#D4A15C]/60 text-xs font-mono text-[#E8B96C] mb-5 ring-2 ring-[#D4A15C]/40 animate-pulse shadow-[0_0_20px_rgba(212,161,92,0.2)]">
+            <span className="w-2 h-2 rounded-full bg-[#D4A15C]" />
+            <span className="font-bold tracking-wider uppercase text-[#F5F1EA]">START HERE — Recommended 1-Click Demo</span>
           </div>
 
-          {/* Headline */}
-          <h1 className="text-4xl sm:text-6xl font-extrabold tracking-tight text-[#F5F1EA] leading-[1.1] mb-6">
-            The trust layer that lets AI agents <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#E8B96C] via-[#D4A15C] to-[#C48C3D]">actually pay.</span>
+          {/* Headline - Primary Claim */}
+          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight text-[#F5F1EA] leading-[1.1] mb-5">
+            The trust layer that lets AI agents <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#F5F1EA] via-[#E8B96C] to-[#D4A15C]">actually pay.</span>
           </h1>
 
           {/* Sub-line */}
-          <p className="max-w-3xl mx-auto text-base sm:text-lg text-[#C5C0B7] leading-relaxed mb-8">
+          <p className="max-w-3xl mx-auto text-base sm:text-lg text-[#C5C0B7] leading-relaxed mb-7">
             Every autonomous money action is explainable, bounded, and gated by a deterministic policy engine — with exactly three verdicts: <span className="font-mono text-emerald-400 font-semibold">ALLOW</span>, <span className="font-mono text-amber-400 font-semibold">FLAG</span>, and <span className="font-mono text-rose-400 font-semibold">BLOCK</span>.
           </p>
 
           {/* CTAs */}
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-12">
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-10">
             <button
               onClick={() => onNavigate('walkthrough')}
-              className="w-full sm:w-auto px-6 py-3.5 rounded-xl bg-[#D4A15C] hover:bg-[#E8B96C] text-black font-semibold text-sm shadow-[0_0_25px_rgba(212,161,92,0.3)] transition-all flex items-center justify-center gap-2"
+              className="w-full sm:w-auto px-7 py-3.5 rounded-xl bg-[#D4A15C] hover:bg-[#E8B96C] text-black font-bold text-sm shadow-[0_0_30px_rgba(212,161,92,0.35)] transition-all flex items-center justify-center gap-2 cursor-pointer ring-2 ring-[#D4A15C]/50"
             >
               <Terminal size={16} />
               <span>Watch it gate a live transaction</span>
@@ -48,7 +48,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
             <button
               onClick={() => onNavigate('dashboard')}
-              className="w-full sm:w-auto px-6 py-3.5 rounded-xl bg-[#161619] hover:bg-[#1F1F24] border border-white/10 text-[#F5F1EA] font-semibold text-sm transition-all flex items-center justify-center gap-2"
+              className="w-full sm:w-auto px-6 py-3.5 rounded-xl bg-[#161619] hover:bg-[#1F1F24] border border-white/10 text-[#F5F1EA] font-semibold text-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
             >
               <Activity size={16} className="text-emerald-400" />
               <span>See the live audit trail</span>
@@ -88,7 +88,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       <section className="max-w-5xl mx-auto px-4">
         <div className="p-6 sm:p-8 rounded-2xl bg-[#111113] border border-white/10 relative overflow-hidden">
           <div className="max-w-3xl">
-            <div className="text-xs font-mono uppercase tracking-widest text-[#D4A15C] mb-2">
+            <div className="text-xs font-mono uppercase tracking-widest text-[#A39E93] mb-2 font-semibold">
               Context & Protocol Landscape
             </div>
             <h2 className="text-2xl font-bold text-[#F5F1EA] mb-4">
@@ -98,7 +98,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               With NPCI Unified Agentic Payments (UAP) initiative and the emerging Google AP2, ACP, and x402 protocol race, AI agents are transitioning from informational chat assistants to autonomous economic actors. But letting an LLM invoke money APIs directly is catastrophic without deterministic boundaries.
             </p>
             <p className="text-xs sm:text-sm text-[#8E8A83] font-mono leading-relaxed bg-black/40 p-3.5 rounded-lg border border-white/5">
-              <strong className="text-[#E8B96C]">Scope Discipline:</strong> RazorGate is <em>inspired by</em> the ACP/AP2/x402 protocol space rather than claiming formal compliance with any single unfinalized draft. We build a clean, typed 6-step A2A protocol that interfaces natively with Razorpay test-mode infrastructure.
+              <strong className="text-[#C5C0B7]">Scope Discipline:</strong> RazorGate is <em>inspired by</em> the ACP/AP2/x402 protocol space rather than claiming formal compliance with any single unfinalized draft. We build a clean, typed 6-step A2A protocol that interfaces natively with Razorpay test-mode infrastructure.
             </p>
           </div>
         </div>
@@ -107,7 +107,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       {/* 3. HOW IT DECIDES: POLICY WATERFALL */}
       <section className="max-w-5xl mx-auto px-4">
         <div className="mb-6 text-center sm:text-left">
-          <div className="text-xs font-mono uppercase tracking-widest text-[#D4A15C] mb-1">
+          <div className="text-xs font-mono uppercase tracking-widest text-[#A39E93] mb-1 font-semibold">
             Deterministic Decision Tree
           </div>
           <h2 className="text-2xl font-bold text-[#F5F1EA]">
@@ -124,7 +124,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       {/* 4. UNDER THE HOOD: 3 CORE ENGINES */}
       <section className="max-w-5xl mx-auto px-4">
         <div className="mb-6 text-center sm:text-left">
-          <div className="text-xs font-mono uppercase tracking-widest text-[#D4A15C] mb-1">
+          <div className="text-xs font-mono uppercase tracking-widest text-[#A39E93] mb-1 font-semibold">
             Real Engineering Under The Hood
           </div>
           <h2 className="text-2xl font-bold text-[#F5F1EA]">
@@ -134,10 +134,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
           {/* Card 1: Apiris */}
-          <div className="p-5 rounded-xl bg-[#111113] border border-white/10 hover:border-[#D4A15C]/30 transition-all flex flex-col justify-between">
+          <div className="p-5 rounded-xl bg-[#111113] border border-white/10 hover:border-white/20 transition-all flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between mb-3">
-                <span className="font-mono text-xs text-[#D4A15C] bg-[#D4A15C]/10 px-2 py-0.5 rounded border border-[#D4A15C]/20">
+                <span className="font-mono text-xs text-[#C5C0B7] bg-white/5 px-2 py-0.5 rounded border border-white/10">
                   PyPI: apiris==1.1.1
                 </span>
                 <span className="text-xs text-[#8E8A83] font-mono">0.061ms p50</span>

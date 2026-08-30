@@ -1,8 +1,28 @@
+# Environments
 .env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+
+# IDEs
+.vscode/
+.idea/
+.gemini/
+
+# Node
 node_modules/
 dist/
-backend/audit/decisions.db
-.venv/
-venv/
+build/
+.next/
+
+# Misc
+*.log
+.DS_Store

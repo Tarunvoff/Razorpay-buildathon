@@ -374,23 +374,23 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
     <div className="space-y-8 pb-16">
       {/* SECTION HEADER */}
       <div className="max-w-5xl mx-auto text-center">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#161619] border border-[#D4A15C]/30 text-xs font-mono text-[#E8B96C] mb-3">
-          <Sparkles size={13} />
+        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#161619] border border-white/10 text-xs font-mono text-[#C5C0B7] mb-3">
+          <Sparkles size={13} className="text-[#A39E93]" />
           <span>Surface 3: Razorpay Test-Mode Proof</span>
         </div>
         <h2 className="text-3xl font-extrabold text-[#F5F1EA]">
           Gated Payment Flow: Guided Walkthrough
         </h2>
         <p className="text-sm text-[#8E8A83] max-w-2xl mx-auto mt-2">
-          Visually prove "no self-reported authorization": watch real XHR fetch calls hit <code className="text-[#D4A15C]">POST /gate/check</code> and <code className="text-[#D4A15C]">POST /orders</code>, launch Razorpay's actual payment modal, and verify server-side HMAC signatures.
+          Visually prove "no self-reported authorization": watch real XHR fetch calls hit <code className="text-[#C5C0B7]">POST /gate/check</code> and <code className="text-[#C5C0B7]">POST /orders</code>, launch Razorpay's actual payment modal, and verify server-side HMAC signatures.
         </p>
       </div>
 
       {/* ITEM 2: FREE-FORM "ASK THE BUYER AGENT" INTERACTIVE INPUT CARD */}
-      <div className="max-w-5xl mx-auto bg-[#161619] border border-[#D4A15C]/40 rounded-2xl p-5 shadow-2xl space-y-4">
+      <div className="max-w-5xl mx-auto bg-[#161619] border border-white/15 rounded-2xl p-5 shadow-2xl space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/10">
           <div className="flex items-center gap-2">
-            <div className="p-1.5 rounded-lg bg-[#D4A15C]/20 border border-[#D4A15C]/40 text-[#D4A15C]">
+            <div className="p-1.5 rounded-lg bg-white/10 border border-white/15 text-[#F5F1EA]">
               <Sparkles size={16} />
             </div>
             <div>
@@ -402,7 +402,7 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
               </p>
             </div>
           </div>
-          <div className="text-[11px] font-mono px-2.5 py-1 rounded bg-white/5 border border-white/10 text-[#E8B96C] shrink-0">
+          <div className="text-[11px] font-mono px-2.5 py-1 rounded bg-white/5 border border-white/10 text-[#C5C0B7] shrink-0">
             Per-Session Guardrail: <span className="font-bold text-white">{runsLeft} / 10 runs remaining</span>
           </div>
         </div>

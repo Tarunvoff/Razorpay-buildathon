@@ -1,6 +1,6 @@
 import React from 'react';
 import type { ApirisRiskTier, Verdict } from '../../types';
-import { ShieldCheck, ShieldAlert, ShieldX } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, ShieldX, SearchX } from 'lucide-react';
 
 interface VerdictBadgeProps {
   verdict: Verdict;
@@ -48,6 +48,16 @@ export const VerdictBadge: React.FC<VerdictBadgeProps> = ({
           glow: 'shadow-[0_0_12px_rgba(239,68,68,0.15)]',
           icon: ShieldX,
           label: 'BLOCK',
+        };
+      case 'NO_MATCH':
+        return {
+          bg: 'bg-slate-800/60',
+          border: 'border-slate-500/40',
+          text: 'text-slate-300',
+          dot: 'bg-slate-400',
+          glow: 'shadow-[0_0_12px_rgba(148,163,184,0.15)]',
+          icon: SearchX,
+          label: 'NO MATCH',
         };
     }
   };

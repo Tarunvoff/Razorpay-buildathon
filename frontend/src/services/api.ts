@@ -31,7 +31,7 @@ export const INITIAL_SEED_DECISIONS: DecisionRecord[] = [
         action: 'pass_through',
         risk_weight: 0.05,
         confidence: 0.98,
-        risk_classification: 'LOW',
+        
         health_scores: { confidentiality: 0.99, availability: 0.98, integrity: 1.0 },
         risk_weights: { confidentiality: 0.01, availability: 0.02, integrity: 0.0 },
       },
@@ -66,7 +66,7 @@ export const INITIAL_SEED_DECISIONS: DecisionRecord[] = [
         action: 'pass_through',
         risk_weight: 0.12,
         confidence: 0.94,
-        risk_classification: 'LOW',
+        
         health_scores: { confidentiality: 0.95, availability: 0.92, integrity: 0.98 },
         risk_weights: { confidentiality: 0.05, availability: 0.08, integrity: 0.02 },
       },
@@ -100,7 +100,7 @@ export const INITIAL_SEED_DECISIONS: DecisionRecord[] = [
         action: 'pass_through',
         risk_weight: 0.02,
         confidence: 0.99,
-        risk_classification: 'LOW',
+        
         health_scores: { confidentiality: 1.0, availability: 0.98, integrity: 1.0 },
         risk_weights: { confidentiality: 0.0, availability: 0.02, integrity: 0.0 },
       },

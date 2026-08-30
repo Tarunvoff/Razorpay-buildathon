@@ -27,9 +27,12 @@ export const PolicyWaterfall: React.FC<PolicyWaterfallProps> = ({
   hasBehaviorFlag = false,
   activeVerdict,
 }) => {
-  const isCeilingBreach = amountInr > 50000.0;
-  const isHighRisk = !isCeilingBreach && riskWeight >= 0.80;
-  const isFlagged = !isCeilingBreach && !isHighRisk && (riskWeight >= 0.40 || hasBehaviorFlag);
+  const safeAmount = typeof amountInr === 'number' && !isNaN(amountInr) ? amountInr : 0;
+  const safeRisk = typeof riskWeight === 'number' && !isNaN(riskWeight) ? riskWeight : 0.05;
+
+  const isCeilingBreach = safeAmount > 50000.0;
+  const isHighRisk = !isCeilingBreach && safeRisk >= 0.80;
+  const isFlagged = !isCeilingBreach && !isHighRisk && (safeRisk >= 0.40 || hasBehaviorFlag);
   const isAllowed = !isCeilingBreach && !isHighRisk && !isFlagged;
 
   const steps: PolicyStep[] = [
@@ -41,8 +44,8 @@ export const PolicyWaterfall: React.FC<PolicyWaterfallProps> = ({
       confidenceStr: '1.00 (deterministic)',
       matched: isCeilingBreach,
       activeReason: isCeilingBreach
-        ? `Order amount ₹${amountInr.toLocaleString('en-IN', { minimumFractionDigits: 2 })} exceeds ₹50,000.00 ceiling`
-        : `₹${amountInr.toLocaleString('en-IN', { minimumFractionDigits: 2 })} ≤ ₹50,000.00 ceiling (passed)`,
+        ? `Order amount ₹${safeAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })} exceeds ₹50,000.00 ceiling`
+        : `₹${safeAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })} ≤ ₹50,000.00 ceiling (passed)`,
     },
     {
       id: 2,
@@ -52,8 +55,8 @@ export const PolicyWaterfall: React.FC<PolicyWaterfallProps> = ({
       confidenceStr: 'inherited from Apiris (≥0.90)',
       matched: isHighRisk,
       activeReason: isHighRisk
-        ? `Risk weight ${riskWeight.toFixed(2)} ≥ 0.80 block threshold`
-        : `Risk weight ${riskWeight.toFixed(2)} < 0.80 (passed)`,
+        ? `Risk weight ${safeRisk.toFixed(2)} ≥ 0.80 block threshold`
+        : `Risk weight ${safeRisk.toFixed(2)} < 0.80 (passed)`,
     },
     {
       id: 3,
@@ -66,8 +69,8 @@ export const PolicyWaterfall: React.FC<PolicyWaterfallProps> = ({
       activeReason: isFlagged
         ? hasBehaviorFlag
           ? `Behavior anomaly detected in rolling window (FLAG)`
-          : `Moderate risk weight ${riskWeight.toFixed(2)} ≥ 0.40 (FLAG)`
-        : `Clean behavior & risk weight ${riskWeight.toFixed(2)} < 0.40 (passed)`,
+          : `Moderate risk weight ${safeRisk.toFixed(2)} ≥ 0.40 (FLAG)`
+        : `Clean behavior & risk weight ${safeRisk.toFixed(2)} < 0.40 (passed)`,
     },
     {
       id: 4,

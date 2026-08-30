@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import type { DecisionRecord } from '../../types';
 import { VerdictBadge } from '../common/VerdictBadge';
 import { PolicyWaterfall } from '../common/PolicyWaterfall';
@@ -24,17 +24,50 @@ export const DecisionDetailDrawer: React.FC<DecisionDetailDrawerProps> = ({
   decision,
   onClose,
 }) => {
-  const [copiedOrderId, setCopiedOrderId] = React.useState(false);
-  const [copiedExplanation, setCopiedExplanation] = React.useState(false);
+  const [copiedOrderId, setCopiedOrderId] = useState(false);
+  const [copiedExplanation, setCopiedExplanation] = useState(false);
+  const [isVisible, setIsVisible] = useState(false);
+  const [activeDecision, setActiveDecision] = useState<DecisionRecord | null>(decision);
 
-  if (!decision) return null;
+  // Handle smooth enter/exit animations and decision switching
+  useEffect(() => {
+    if (decision) {
+      setActiveDecision(decision);
+      // Lock background body scroll
+      document.body.style.overflow = 'hidden';
+      // Trigger slide-in animation frame
+      const timer = requestAnimationFrame(() => setIsVisible(true));
+      return () => {
+        cancelAnimationFrame(timer);
+      };
+    } else {
+      setIsVisible(false);
+      const timer = setTimeout(() => {
+        setActiveDecision(null);
+        document.body.style.overflow = '';
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [decision]);
 
-  const isAllow = decision.verdict === 'ALLOW';
-  const isBlock = decision.verdict === 'BLOCK';
-  const isFlag = decision.verdict === 'FLAG';
+  // Clean up body scroll lock on unmount
+  useEffect(() => {
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, []);
 
-  const apirisTelemetry = decision.evidence?.apiris;
-  const behaviorTelemetry = decision.evidence?.behavior;
+  if (!activeDecision && !decision) return null;
+
+  const current = decision || activeDecision;
+  if (!current) return null;
+
+  const isAllow = current.verdict === 'ALLOW';
+  const isBlock = current.verdict === 'BLOCK';
+  const isFlag = current.verdict === 'FLAG';
+
+  const apirisTelemetry = current.evidence?.apiris;
+  const behaviorTelemetry = current.evidence?.behavior;
 
   const copyToClipboard = (text: string, type: 'order' | 'explanation') => {
     navigator.clipboard.writeText(text);
@@ -49,25 +82,31 @@ export const DecisionDetailDrawer: React.FC<DecisionDetailDrawerProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 overflow-hidden flex justify-end">
-      {/* Backdrop */}
+      {/* Backdrop with fade transition */}
       <div
-        className="fixed inset-0 bg-black/70 backdrop-blur-sm transition-opacity"
+        className={`fixed inset-0 bg-black/75 backdrop-blur-sm transition-opacity duration-300 ease-in-out ${
+          isVisible ? 'opacity-100' : 'opacity-0'
+        }`}
         onClick={onClose}
       />
 
-      {/* Drawer Container */}
-      <div className="relative w-full max-w-2xl bg-[#0E0E10] border-l border-white/10 h-full overflow-y-auto shadow-2xl flex flex-col z-10 text-[#F5F1EA]">
+      {/* Drawer Container with slide transition */}
+      <div
+        className={`relative w-full max-w-2xl bg-[#0E0E10] border-l border-white/10 h-full overflow-y-auto shadow-2xl flex flex-col z-10 text-[#F5F1EA] transform transition-transform duration-300 ease-in-out ${
+          isVisible ? 'translate-x-0' : 'translate-x-full'
+        }`}
+      >
         {/* Header */}
         <div className="sticky top-0 bg-[#0E0E10]/95 backdrop-blur border-b border-white/10 px-6 py-4 flex items-center justify-between z-20">
           <div>
             <div className="flex items-center gap-2">
               <span className="text-xs font-mono text-[#D4A15C] font-semibold">
-                AUDIT RECORD #{decision.id}
+                AUDIT RECORD #{current.id}
               </span>
               <span className="text-xs text-[#8E8A83]">·</span>
               <span className="text-xs font-mono text-[#8E8A83] flex items-center gap-1">
                 <Clock size={12} />
-                {new Date(decision.timestamp).toLocaleTimeString()}
+                {new Date(current.timestamp || Date.now()).toLocaleTimeString()}
               </span>
             </div>
             <h2 className="text-base font-bold text-[#F5F1EA] mt-0.5">
@@ -77,13 +116,14 @@ export const DecisionDetailDrawer: React.FC<DecisionDetailDrawerProps> = ({
 
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-[#8E8A83] hover:text-[#F5F1EA] transition-all"
+            aria-label="Close drawer"
+            className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-[#8E8A83] hover:text-[#F5F1EA] transition-all cursor-pointer"
           >
             <X size={18} />
           </button>
         </div>
 
-        {/* Content Body */}
+        {/* Content Body with consistent spacing */}
         <div className="p-6 space-y-6 flex-1">
           {/* Top Summary Banner */}
           <div
@@ -102,24 +142,24 @@ export const DecisionDetailDrawer: React.FC<DecisionDetailDrawerProps> = ({
                 </div>
                 <div className="flex items-center gap-2 mb-2">
                   <VerdictBadge
-                    verdict={decision.verdict}
-                    confidence={decision.confidence}
+                    verdict={current.verdict}
+                    confidence={current.confidence}
                     riskTier={apirisTelemetry?.risk_classification}
                     size="lg"
                   />
                 </div>
                 <div className="text-xs font-mono text-[#F5F1EA] leading-relaxed">
-                  Factor: <code className="text-[#D4A15C]">{decision.primary_factor}</code>
+                  Factor: <code className="text-[#D4A15C]">{current.primary_factor}</code>
                 </div>
               </div>
 
               <div className="text-right font-mono">
                 <div className="text-xs text-[#8E8A83]">Amount</div>
                 <div className="text-xl font-bold text-[#F5F1EA] tabular-nums">
-                  ₹{decision.amount_inr.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  ₹{(current.amount_inr ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                 </div>
                 <div className="text-[10px] text-[#8E8A83]">
-                  ({decision.amount_paise} paise)
+                  ({current.amount_paise ?? 0} paise)
                 </div>
               </div>
             </div>
@@ -134,8 +174,8 @@ export const DecisionDetailDrawer: React.FC<DecisionDetailDrawerProps> = ({
                   <span>Audit Explanation (audit/explainer.py)</span>
                 </div>
                 <button
-                  onClick={() => copyToClipboard(decision.summary, 'explanation')}
-                  className="text-[10px] font-mono text-[#8E8A83] hover:text-[#F5F1EA] flex items-center gap-1 bg-white/5 px-2 py-0.5 rounded border border-white/10"
+                  onClick={() => copyToClipboard(current.summary || '', 'explanation')}
+                  className="text-[10px] font-mono text-[#8E8A83] hover:text-[#F5F1EA] flex items-center gap-1 bg-white/5 px-2 py-0.5 rounded border border-white/10 cursor-pointer"
                 >
                   {copiedExplanation ? <Check size={11} className="text-emerald-400" /> : <Copy size={11} />}
                   <span>{copiedExplanation ? 'Copied' : 'Copy'}</span>
@@ -143,7 +183,7 @@ export const DecisionDetailDrawer: React.FC<DecisionDetailDrawerProps> = ({
               </div>
 
               <p className="text-xs font-mono text-rose-200 leading-relaxed bg-black/40 p-3 rounded-lg border border-rose-500/20">
-                "{decision.summary}"
+                "{current.summary}"
               </p>
 
               <div className="mt-2.5 flex items-center gap-2 text-[11px] text-[#8E8A83]">
@@ -154,7 +194,7 @@ export const DecisionDetailDrawer: React.FC<DecisionDetailDrawerProps> = ({
           )}
 
           {/* ALLOW PROOF POINT: Real Razorpay Order ID */}
-          {isAllow && decision.razorpay_order_id && (
+          {isAllow && current.razorpay_order_id && (
             <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-500/30">
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-400 font-mono">
@@ -162,8 +202,8 @@ export const DecisionDetailDrawer: React.FC<DecisionDetailDrawerProps> = ({
                   <span>Downstream Razorpay Test-Mode Order</span>
                 </div>
                 <button
-                  onClick={() => copyToClipboard(decision.razorpay_order_id || '', 'order')}
-                  className="text-[10px] font-mono text-[#8E8A83] hover:text-[#F5F1EA] flex items-center gap-1 bg-white/5 px-2 py-0.5 rounded border border-white/10"
+                  onClick={() => copyToClipboard(current.razorpay_order_id || '', 'order')}
+                  className="text-[10px] font-mono text-[#8E8A83] hover:text-[#F5F1EA] flex items-center gap-1 bg-white/5 px-2 py-0.5 rounded border border-white/10 cursor-pointer"
                 >
                   {copiedOrderId ? <Check size={11} className="text-emerald-400" /> : <Copy size={11} />}
                   <span>{copiedOrderId ? 'Copied' : 'Copy Order ID'}</span>
@@ -171,52 +211,55 @@ export const DecisionDetailDrawer: React.FC<DecisionDetailDrawerProps> = ({
               </div>
 
               <div className="flex items-center justify-between bg-black/40 p-3 rounded-lg border border-emerald-500/20 font-mono text-xs">
-                <span className="text-[#F5F1EA] font-semibold">{decision.razorpay_order_id}</span>
+                <span className="text-[#F5F1EA] font-semibold">{current.razorpay_order_id}</span>
                 <span className="text-emerald-400 text-[11px] flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                   Verified on Razorpay Test API
                 </span>
               </div>
 
-              {decision.allow_token && (
+              {current.allow_token && (
                 <div className="mt-2 text-[10px] font-mono text-[#8E8A83] truncate">
-                  HMAC ALLOW Token: <code>{decision.allow_token.slice(0, 32)}...</code>
+                  HMAC ALLOW Token: <code>{current.allow_token.slice(0, 32)}...</code>
                 </div>
               )}
             </div>
           )}
 
           {/* 1. Policy Hierarchy Waterfall Trace */}
-          <div>
-            <h4 className="text-xs font-mono uppercase tracking-wider text-[#D4A15C] mb-2.5">
+          <section>
+            <h4 className="text-xs font-mono uppercase tracking-wider text-[#D4A15C] mb-2.5 flex items-center gap-2 font-semibold">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#D4A15C]" />
               1. Policy Hierarchy Execution Trace
             </h4>
             <PolicyWaterfall
-              amountInr={decision.amount_inr}
+              amountInr={current.amount_inr}
               riskWeight={apirisTelemetry?.risk_weight ?? 0.05}
               hasBehaviorFlag={behaviorTelemetry?.flag ?? false}
-              activeVerdict={decision.verdict}
-              primaryFactor={decision.primary_factor}
+              activeVerdict={current.verdict}
+              primaryFactor={current.primary_factor}
             />
-          </div>
+          </section>
 
           {/* 2. Apiris CAD Triad Health & Inverted Risk */}
-          <div>
-            <h4 className="text-xs font-mono uppercase tracking-wider text-[#D4A15C] mb-2.5">
+          <section>
+            <h4 className="text-xs font-mono uppercase tracking-wider text-[#D4A15C] mb-2.5 flex items-center gap-2 font-semibold">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#D4A15C]" />
               2. Apiris Security Telemetry
             </h4>
             <ApirisScoreTriad telemetry={apirisTelemetry} />
-          </div>
+          </section>
 
           {/* 3. Behavioral Telemetry Signals */}
-          <div>
-            <h4 className="text-xs font-mono uppercase tracking-wider text-[#D4A15C] mb-2.5">
+          <section>
+            <h4 className="text-xs font-mono uppercase tracking-wider text-[#D4A15C] mb-2.5 flex items-center gap-2 font-semibold">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#D4A15C]" />
               3. Session & Behavioral Signals
             </h4>
-            <div className="p-4 rounded-xl bg-[#111113] border border-white/10 space-y-3 font-mono text-xs">
+            <div className="p-4 rounded-xl bg-[#111113] border border-white/10 space-y-3 font-mono text-xs shadow-xl">
               <div className="flex items-center justify-between">
                 <span className="text-[#8E8A83]">Agent ID:</span>
-                <span className="text-[#F5F1EA] font-semibold">{decision.agent_id}</span>
+                <span className="text-[#F5F1EA] font-semibold">{current.agent_id}</span>
               </div>
 
               <div className="flex items-center justify-between">
@@ -225,7 +268,7 @@ export const DecisionDetailDrawer: React.FC<DecisionDetailDrawerProps> = ({
                   className={
                     behaviorTelemetry?.flag
                       ? 'text-amber-400 font-bold'
-                      : 'text-emerald-400'
+                      : 'text-emerald-400 font-semibold'
                   }
                 >
                   {behaviorTelemetry?.flag ? 'FLAG TRIGGERED' : 'CLEAN / NORMAL'}
@@ -253,32 +296,33 @@ export const DecisionDetailDrawer: React.FC<DecisionDetailDrawerProps> = ({
                 </div>
               )}
             </div>
-          </div>
+          </section>
 
           {/* 4. A2A Protocol Handshake Transcript */}
-          <div>
-            <h4 className="text-xs font-mono uppercase tracking-wider text-[#D4A15C] mb-2.5">
+          <section>
+            <h4 className="text-xs font-mono uppercase tracking-wider text-[#D4A15C] mb-2.5 flex items-center gap-2 font-semibold">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#D4A15C]" />
               4. A2A Protocol Handshake Transcript
             </h4>
             <AgentTimeline
               receipt={{
-                mandate_id: `mandate_${decision.id}`,
-                buyer_agent_id: decision.agent_id,
+                mandate_id: `mandate_${current.id}`,
+                buyer_agent_id: current.agent_id,
                 merchant_id: 'merchant_razorgate_cloud',
-                sku: String((decision.evidence as any)?.request?.notes?.sku || 'compute-gpu-h100-1hr'),
-                amount_paise: decision.amount_paise,
-                amount_inr: decision.amount_inr,
+                sku: String((current.evidence as any)?.request?.notes?.sku || 'compute-gpu-h100-1hr'),
+                amount_paise: current.amount_paise,
+                amount_inr: current.amount_inr,
                 currency: 'INR',
-                verdict: decision.verdict,
-                primary_factor: decision.primary_factor,
-                summary: decision.summary,
-                confidence: decision.confidence,
-                audit_id: decision.id,
-                order: decision.razorpay_order_id ? { id: decision.razorpay_order_id } : null,
+                verdict: current.verdict,
+                primary_factor: current.primary_factor,
+                summary: current.summary,
+                confidence: current.confidence,
+                audit_id: current.id,
+                order: current.razorpay_order_id ? { id: current.razorpay_order_id } : null,
               }}
-              explanation={decision.summary}
+              explanation={current.summary}
             />
-          </div>
+          </section>
         </div>
       </div>
     </div>

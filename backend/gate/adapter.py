@@ -31,7 +31,7 @@ class GateResult(TypedDict, total=False):
 def create_apiris_engine(config: Optional[ApirisConfig] = None) -> tuple[ObservationEvaluator, DecisionEngine]:
     """Factory creating configured Apiris ObservationEvaluator and DecisionEngine instances."""
     cfg = config or ApirisConfig(
-        enable_ai=True,
+        enable_ai=False,
         integrity_threshold=0.0,
         availability_threshold=0.5,
         latency_budget_ms=1000,

@@ -425,6 +425,6 @@ class BuyerAgent:
         elif receipt.verdict == "FLAG":
             return (
                 f"Transaction for '{receipt.sku}' at ₹{receipt.amount_inr:,.2f} was flagged for behavioral anomaly "
-                f"({receipt.primary_factor}). Awaiting human confirmation before retrying."
+                f"({receipt.primary_factor}). Requires stepped-up authorization from a human before proceeding."
             )
         return receipt.summary

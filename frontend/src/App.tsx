@@ -64,7 +64,7 @@ export function App() {
               apiris: {
                 risk_weight: event.verdict === 'BLOCK' ? 0.85 : event.verdict === 'FLAG' ? 0.45 : 0.05,
                 confidence: Number(event.confidence) || 1.0,
-                risk_classification: event.verdict === 'BLOCK' ? 'HIGH' : event.verdict === 'FLAG' ? 'ELEVATED' : 'LOW',
+                risk_classification: event.verdict === 'BLOCK' ? 'CRITICAL' : event.verdict === 'FLAG' ? 'HIGH' : 'LOW',
                 action: event.verdict === 'BLOCK' ? 'reject_response' : 'pass_through',
                 health_scores: {
                   confidentiality: event.verdict === 'BLOCK' ? 0.2 : 0.98,
@@ -144,7 +144,7 @@ export function App() {
             scenario === 'forced_failure_block'
               ? 'I found a matching option (enterprise-support-tier1 at ₹65,000.00), but RazorGate security policy ceiling (₹50,000.00) blocked execution safely. No payment made.'
               : scenario === 'behavior_flag'
-              ? 'Transaction of ₹49.00 was flagged for rolling window frequency anomaly. Approved with verification flag.'
+              ? 'Transaction of ₹49.00 was flagged for rolling window frequency anomaly. Requires stepped-up authorization from a human before proceeding.'
               : 'Successfully authorized and placed order for compute-gpu-h100-1hr at ₹299.00. Razorpay Order ID: order_TUkjWMgUTBNytJ.',
           order:
             scenario === 'forced_failure_block'
@@ -226,7 +226,7 @@ export function App() {
       />
 
       {/* Main Surface View Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-6">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-3">
         {currentTab === 'landing' && (
           <LandingPage
             onNavigate={(tab) => {

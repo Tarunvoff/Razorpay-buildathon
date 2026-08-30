@@ -1,23 +1,23 @@
 import sys
+import re
 
-client_path = r"C:\Users\TARUN\AppData\Roaming\Python\Python313\site-packages\apiris\client.py"
-with open(client_path, 'r', encoding='utf-8') as f:
-    content = f.read()
+cli_path = r"C:\Users\TARUN\AppData\Roaming\Python\Python313\site-packages\apiris\cli.py"
 
-# Modify client.py to handle missing schema properly
-if 'if not url.startswith(("http://", "https://")):' not in content:
-    patch = """
-        timing_ms = int((time.time() - started_at) * 1000)
+with open(cli_path, 'r', encoding='utf-8') as f:
+    text = f.read()
 
-        # Fix: If it's a client error before network (like MissingSchema), set timing to None
-        if error and error.get("name") in ["MissingSchema", "InvalidURL", "InvalidSchema"]:
-            timing_ms = None
-"""
-    content = content.replace("timing_ms = int((time.time() - started_at) * 1000)", patch)
-    
-    with open(client_path, 'w', encoding='utf-8') as f:
-        f.write(content)
-        
-    print("Patched client.py")
-else:
-    print("Already patched")
+bad_text = '''        if response.status_code is None:
+            console.print("[bold yellow]Note:[/bold yellow] Fast edge-level rejection (No network call)")
+'''
+text = text.replace(bad_text, '')
+
+# Now let's inject it correctly where we wanted it!
+target = 'console.print(f"[bold]Status Code:[/bold] {response.status_code}")'
+replacement = target + '\n            if str(response.status_code) == "None":\n                console.print("[bold yellow]Note:[/bold yellow] Fast edge-level rejection (No network call)")'
+
+if 'Fast edge-level rejection' not in text:
+    text = text.replace(target, replacement)
+
+with open(cli_path, 'w', encoding='utf-8') as f:
+    f.write(text)
+print('Fixed cli.py!')

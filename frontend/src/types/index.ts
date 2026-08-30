@@ -1,4 +1,4 @@
-export type Verdict = 'ALLOW' | 'FLAG' | 'BLOCK';
+export type Verdict = 'ALLOW' | 'FLAG' | 'BLOCK' | 'NO_MATCH';
 
 export type ApirisRiskTier = 'LOW' | 'MODERATE' | 'ELEVATED' | 'HIGH' | 'CRITICAL';
 

@@ -11,35 +11,37 @@ export const ApirisScoreTriad: React.FC<ApirisScoreTriadProps> = ({
   telemetry,
   compact = false,
 }) => {
-  const healthScores = telemetry?.health_scores || {
-    confidentiality: 0.98,
-    availability: 0.99,
-    integrity: 1.0,
+  const rawHealth = telemetry?.health_scores;
+  const healthScores = {
+    confidentiality: typeof rawHealth?.confidentiality === 'number' ? rawHealth.confidentiality : 0.98,
+    availability: typeof rawHealth?.availability === 'number' ? rawHealth.availability : 0.99,
+    integrity: typeof rawHealth?.integrity === 'number' ? rawHealth.integrity : 1.0,
   };
 
-  const riskWeights = telemetry?.risk_weights || {
-    confidentiality: 1.0 - healthScores.confidentiality,
-    availability: 1.0 - healthScores.availability,
-    integrity: 1.0 - healthScores.integrity,
+  const rawRisk = telemetry?.risk_weights;
+  const riskWeights = {
+    confidentiality: typeof rawRisk?.confidentiality === 'number' ? rawRisk.confidentiality : Math.max(0, 1.0 - healthScores.confidentiality),
+    availability: typeof rawRisk?.availability === 'number' ? rawRisk.availability : Math.max(0, 1.0 - healthScores.availability),
+    integrity: typeof rawRisk?.integrity === 'number' ? rawRisk.integrity : Math.max(0, 1.0 - healthScores.integrity),
   };
 
-  const overallRiskWeight = telemetry?.risk_weight ?? Math.max(
-    riskWeights.confidentiality,
-    riskWeights.availability,
-    riskWeights.integrity
-  );
+  const overallRiskWeight = typeof telemetry?.risk_weight === 'number'
+    ? telemetry.risk_weight
+    : Math.max(
+        riskWeights.confidentiality,
+        riskWeights.availability,
+        riskWeights.integrity
+      );
 
-  const riskTier: ApirisRiskTier = telemetry?.risk_classification || (
-    overallRiskWeight < 0.20
-      ? 'LOW'
-      : overallRiskWeight < 0.40
-      ? 'MODERATE'
-      : overallRiskWeight < 0.60
-      ? 'ELEVATED'
-      : overallRiskWeight < 0.80
-      ? 'HIGH'
-      : 'CRITICAL'
-  );
+  const riskTier: ApirisRiskTier = overallRiskWeight >= 0.80 
+    ? 'CRITICAL' 
+    : overallRiskWeight >= 0.60 
+    ? 'HIGH' 
+    : overallRiskWeight >= 0.40
+    ? 'ELEVATED'
+    : overallRiskWeight > 0.10 
+    ? 'MODERATE' 
+    : 'LOW';
 
   const action: ApirisMitigationAction = telemetry?.action || (
     overallRiskWeight >= 0.80 ? 'reject_response' : 'pass_through'
@@ -50,35 +52,35 @@ export const ApirisScoreTriad: React.FC<ApirisScoreTriadProps> = ({
       name: 'Confidentiality',
       code: 'C',
       icon: Lock,
-      health: healthScores.confidentiality,
-      risk: riskWeights.confidentiality,
+      health: healthScores.confidentiality ?? 0.98,
+      risk: riskWeights.confidentiality ?? 0.02,
       description: 'Secret leakage, auth headers, token exposure',
     },
     {
       name: 'Availability',
       code: 'A',
       icon: Server,
-      health: healthScores.availability,
-      risk: riskWeights.availability,
+      health: healthScores.availability ?? 0.99,
+      risk: riskWeights.availability ?? 0.01,
       description: 'Latency budget, rate limits, 5xx error spikes',
     },
     {
       name: 'Data Integrity',
       code: 'D',
       icon: Database,
-      health: healthScores.integrity,
-      risk: riskWeights.integrity,
+      health: healthScores.integrity ?? 1.0,
+      risk: riskWeights.integrity ?? 0.0,
       description: 'Schema drift, payload mutation, param tampering',
     },
   ];
 
-  const getHealthColor = (score: number) => {
+  const getHealthColor = (score: number = 1.0) => {
     if (score >= 0.90) return 'text-emerald-400 border-emerald-500/30 bg-emerald-950/40';
     if (score >= 0.70) return 'text-amber-400 border-amber-500/30 bg-amber-950/40';
     return 'text-rose-400 border-rose-500/30 bg-rose-950/40';
   };
 
-  const getHealthBarColor = (score: number) => {
+  const getHealthBarColor = (score: number = 1.0) => {
     if (score >= 0.90) return 'bg-emerald-400';
     if (score >= 0.70) return 'bg-amber-400';
     return 'bg-rose-400';
@@ -174,21 +176,21 @@ export const ApirisScoreTriad: React.FC<ApirisScoreTriadProps> = ({
                   <div className="flex items-center justify-between text-xs font-mono">
                     <span className="text-[#8E8A83]">Health Score:</span>
                     <span className={`font-bold tabular-nums ${getHealthColor(pillar.health).split(' ')[0]}`}>
-                      {pillar.health.toFixed(2)} / 1.00
+                      {(pillar.health ?? 1.0).toFixed(2)} / 1.00
                     </span>
                   </div>
 
                   <div className="w-full h-1.5 bg-black/40 rounded-full overflow-hidden border border-white/5">
                     <div
                       className={`h-full rounded-full transition-all duration-500 ${getHealthBarColor(pillar.health)}`}
-                      style={{ width: `${Math.max(0, Math.min(100, pillar.health * 100))}%` }}
+                      style={{ width: `${Math.max(0, Math.min(100, (pillar.health ?? 1.0) * 100))}%` }}
                     />
                   </div>
 
                   <div className="flex items-center justify-between text-[10px] font-mono pt-1 text-[#8E8A83]">
                     <span>Inverted Risk:</span>
                     <span className="text-[#E8B96C] font-semibold tabular-nums">
-                      {pillar.risk.toFixed(2)}
+                      {(pillar.risk ?? 0.0).toFixed(2)}
                     </span>
                   </div>
                 </div>
