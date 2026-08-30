@@ -300,8 +300,11 @@ def create_order(req: CreateOrderRequest):
     Links the resulting Razorpay order ID back to the originating audit decision.
     """
     try:
-        # Software-level Idempotency Guard (TEMPORARILY DISABLED for E2E proof)
-        if False: # req.audit_id:
+        # Software-Level Idempotency & Replay Protection Guard
+        # Serves as a fast-path defense-in-depth layer on top of Razorpay's API guarantee.
+        # Resolves audit decision ID -> existing Razorpay order ID to prevent duplicate order generation
+        # on retried agent mandate submissions, returning the existing order object deterministically.
+        if req.audit_id:
             record = get_decision_by_id(req.audit_id)
             if record and record.get("razorpay_order_id"):
                 # Fetch existing order instead of creating a duplicate
