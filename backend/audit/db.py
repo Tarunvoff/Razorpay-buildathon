@@ -47,12 +47,30 @@ def init_db():
         )
     """)
 
-    # Auto-migrate razorpay_order_id if not present
+    # Auto-migrate razorpay_order_id, webhook_status, webhook_confirmed_at if not present
     if table_info and "razorpay_order_id" not in column_names:
         try:
             conn.execute("ALTER TABLE decisions ADD COLUMN razorpay_order_id TEXT")
         except Exception:
             pass
+    if table_info and "webhook_status" not in column_names:
+        try:
+            conn.execute("ALTER TABLE decisions ADD COLUMN webhook_status TEXT")
+        except Exception:
+            pass
+    if table_info and "webhook_confirmed_at" not in column_names:
+        try:
+            conn.execute("ALTER TABLE decisions ADD COLUMN webhook_confirmed_at TEXT")
+        except Exception:
+            pass
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS processed_webhooks (
+            event_id TEXT PRIMARY KEY,
+            event_type TEXT NOT NULL,
+            processed_at TEXT NOT NULL
+        )
+    """)
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_decisions_agent ON decisions (agent_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_decisions_timestamp ON decisions (timestamp DESC)")
@@ -183,3 +201,69 @@ def get_decision_by_id(decision_id: int) -> Optional[Dict[str, Any]]:
     except Exception:
         item["evidence"] = {}
     return item
+
+
+def is_webhook_processed(event_id: str) -> bool:
+    """Checks if a webhook event_id has already been processed (idempotency check)."""
+    init_db()
+    conn = get_db_connection()
+    row = conn.execute("SELECT 1 FROM processed_webhooks WHERE event_id = ?", (event_id,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def record_webhook_processed(event_id: str, event_type: str) -> bool:
+    """Records a webhook event_id as processed in the database."""
+    init_db()
+    conn = get_db_connection()
+    now_ts = datetime.now(timezone.utc).isoformat()
+    try:
+        conn.execute(
+            "INSERT INTO processed_webhooks (event_id, event_type, processed_at) VALUES (?, ?, ?)",
+            (event_id, event_type, now_ts),
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except sqlite3.IntegrityError:
+        conn.close()
+        return False
+
+
+def get_decision_by_order_id(razorpay_order_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieves a single decision record by Razorpay Order ID."""
+    init_db()
+    conn = get_db_connection()
+    row = conn.execute("SELECT * FROM decisions WHERE razorpay_order_id = ?", (razorpay_order_id,)).fetchone()
+    conn.close()
+    if not row:
+        return None
+    item = dict(row)
+    try:
+        item["evidence"] = json.loads(item["evidence_json"])
+    except Exception:
+        item["evidence"] = {}
+    return item
+
+
+def update_decision_webhook_status(razorpay_order_id: str, webhook_status: str) -> Optional[int]:
+    """
+    Updates the webhook_status and webhook_confirmed_at fields for a decision matching razorpay_order_id.
+    Returns the updated decision audit_id if found, or None if no matching decision row.
+    """
+    init_db()
+    now_ts = datetime.now(timezone.utc).isoformat()
+    conn = get_db_connection()
+    row = conn.execute("SELECT id FROM decisions WHERE razorpay_order_id = ?", (razorpay_order_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    audit_id = row["id"]
+    conn.execute(
+        "UPDATE decisions SET webhook_status = ?, webhook_confirmed_at = ? WHERE id = ?",
+        (webhook_status, now_ts, audit_id),
+    )
+    conn.commit()
+    conn.close()
+    return audit_id
+

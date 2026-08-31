@@ -60,10 +60,10 @@ Due to buildathon time constraints, several systems use simplified architectures
 - **Limitation:** Hard logical segregation (tenant-level data isolation, API key scoping per agent namespace) is not strictly enforced at the data layer.
 - **Future Fix:** Needs a comprehensive AuthZ framework redesign with scoped JWTs, role-based access control (RBAC), and tenant partitioning.
 
-### 4. Webhook Reliability
-- **Current State:** Payment success events are simulated or rely on synchronous checks instead of asynchronous webhook delivery.
-- **Limitation:** Lacks durability, retries, and dead-letter queues (DLQs) necessary for a reliable asynchronous payment architecture.
-- **Future Fix:** Implementing a dedicated webhook ingester service with signature verification and idempotent processing queues.
+### 4. Webhook Ingestion Queue & Fault Resilience
+- **Current State:** A real, signature-verified webhook listener (`POST /webhooks/razorpay`) processes `payment.captured` and `payment.failed` events idempotently with HMAC-SHA256 verification (`X-Razorpay-Signature`) and updates decision audit records to `confirmed_paid`.
+- **Limitation:** Ingestion runs synchronously in-process without an asynchronous Dead-Letter Queue (DLQ), background task worker pool (e.g. Celery/SQS), or persistent retry queue.
+- **Future Fix:** Moving webhook handling to a decoupled worker queue with a persistent event store and automatic retry policies.
 
 ## Setup
 1. Create virtual environment & install dependencies:

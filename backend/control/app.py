@@ -10,7 +10,10 @@ ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from fastapi import FastAPI, HTTPException, Query
+import hashlib
+import hmac
+import time
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -19,8 +22,11 @@ from backend.audit.db import (
     get_decision_by_id,
     get_recent_decisions,
     init_db,
+    is_webhook_processed,
     link_order_to_decision,
     record_decision,
+    record_webhook_processed,
+    update_decision_webhook_status,
 )
 from backend.config import settings
 from backend.gate import adapter
@@ -409,6 +415,105 @@ async def verify_order_signature(req: VerifyOrderRequest):
     })
 
     return response_data
+
+
+@app.post("/webhooks/razorpay")
+async def handle_razorpay_webhook(request: Request):
+    """
+    Razorpay Webhook Listener.
+    Verifies X-Razorpay-Signature header against raw request body using razorpay_webhook_secret.
+    Rejects tampered / unverified payloads with HTTP 400 immediately before parsing.
+    Handles 'payment.captured' and 'payment.failed' events idempotently.
+    Updates the audit ledger to mark decisions confirmed-paid asynchronously.
+    """
+    raw_body = await request.body()
+    x_signature = request.headers.get("X-Razorpay-Signature") or ""
+
+    secret = (settings.razorpay_webhook_secret or "razorgate_webhook_secret_dev").encode("utf-8")
+    expected_sig = hmac.new(secret, raw_body, hashlib.sha256).hexdigest()
+
+    if not x_signature or not hmac.compare_digest(expected_sig, x_signature):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid Razorpay webhook signature. Tampering detected.",
+        )
+
+    try:
+        payload = json.loads(raw_body)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    event = payload.get("event", "unknown")
+    event_id = payload.get("event_id") or f"evt_{int(time.time() * 1000)}"
+
+    # Idempotency check: skip processing if duplicate event ID
+    if is_webhook_processed(event_id):
+        return {
+            "status": "already_processed",
+            "event_id": event_id,
+            "event": event,
+            "idempotency_hit": True,
+        }
+
+    # Record event ID for idempotency tracking
+    record_webhook_processed(event_id, event)
+
+    payment_entity = payload.get("payload", {}).get("payment", {}).get("entity", {})
+    razorpay_order_id = payment_entity.get("order_id") or payment_entity.get("id")
+    razorpay_payment_id = payment_entity.get("id")
+
+    if event == "payment.captured":
+        status_label = "confirmed_paid"
+        audit_id = update_decision_webhook_status(razorpay_order_id, status_label) if razorpay_order_id else None
+
+        await broadcast_decision_event({
+            "type": "webhook_payment_captured",
+            "event_id": event_id,
+            "event": event,
+            "razorpay_order_id": razorpay_order_id,
+            "razorpay_payment_id": razorpay_payment_id,
+            "status": status_label,
+            "audit_id": audit_id,
+        })
+
+        return {
+            "status": "processed",
+            "event_id": event_id,
+            "event": event,
+            "razorpay_order_id": razorpay_order_id,
+            "razorpay_payment_id": razorpay_payment_id,
+            "audit_id": audit_id,
+            "payment_status": status_label,
+        }
+    elif event == "payment.failed":
+        status_label = "payment_failed"
+        audit_id = update_decision_webhook_status(razorpay_order_id, status_label) if razorpay_order_id else None
+
+        await broadcast_decision_event({
+            "type": "webhook_payment_failed",
+            "event_id": event_id,
+            "event": event,
+            "razorpay_order_id": razorpay_order_id,
+            "razorpay_payment_id": razorpay_payment_id,
+            "status": status_label,
+            "audit_id": audit_id,
+        })
+
+        return {
+            "status": "processed",
+            "event_id": event_id,
+            "event": event,
+            "razorpay_order_id": razorpay_order_id,
+            "razorpay_payment_id": razorpay_payment_id,
+            "audit_id": audit_id,
+            "payment_status": status_label,
+        }
+
+    return {
+        "status": "ignored",
+        "event_id": event_id,
+        "event": event,
+    }
 
 
 

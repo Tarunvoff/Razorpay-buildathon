@@ -146,6 +146,12 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
 
   // 30s token countdown timer
   useEffect(() => {
+    if (currentStep === 0) {
+      setTokenCountdown(30);
+    }
+  }, [currentStep]);
+
+  useEffect(() => {
     if (currentStep >= 3 && selectedScenario !== 'forced_failure_block') {
       const interval = setInterval(() => {
         setTokenCountdown((prev) => (prev > 0 ? prev - 1 : 0));
@@ -416,6 +422,7 @@ export const GatedFlowWalkthrough: React.FC<GatedFlowWalkthroughProps> = ({
     setRunsLeft((prev) => Math.max(0, prev - 1));
     setSelectedScenario('custom');
     setCurrentStep(0);
+    setTokenCountdown(30);
     setRealGateResult(null);
     setRealOrderResult(null);
     setVerifiedPayment(null);
