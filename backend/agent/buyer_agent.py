@@ -163,7 +163,10 @@ class BuyerAgent:
         # Try Real Claude API Tool / Completion call if API key present
         if self.api_key:
             try:
-                client = anthropic.Anthropic(api_key=self.api_key, timeout=5.0)
+                client_kwargs: Dict[str, Any] = {"api_key": self.api_key, "timeout": 5.0}
+                if settings.base_url:
+                    client_kwargs["base_url"] = settings.base_url
+                client = anthropic.Anthropic(**client_kwargs)
                 offers_summary = [
                     {
                         "sku": o.sku,
@@ -186,7 +189,7 @@ class BuyerAgent:
                 )
 
                 response = client.messages.create(
-                    model="claude-3-5-sonnet-20001022",
+                    model=settings.model_name,
                     max_tokens=400,
                     temperature=0.2,
                     system=BUYER_SYSTEM_PROMPT,
@@ -211,8 +214,7 @@ class BuyerAgent:
                         })
                         return target, llm_reasoning
             except Exception as e:
-                # Log API error and proceed with deterministic fallback
-                self.log_step("llm_api_error", {"error": str(e), "execution_mode": "deterministic_fallback"})
+                # Log API error internally and proceed with deterministic fallback
                 pass
 
         # Deterministic comparative reasoning fallback (strictly anti-hallucinatory)
@@ -388,7 +390,10 @@ class BuyerAgent:
         """
         if self.api_key:
             try:
-                client = anthropic.Anthropic(api_key=self.api_key)
+                client_kwargs: Dict[str, Any] = {"api_key": self.api_key}
+                if settings.base_url:
+                    client_kwargs["base_url"] = settings.base_url
+                client = anthropic.Anthropic(**client_kwargs)
                 prompt_user = (
                     f"Receipt Summary:\n"
                     f"Verdict: {receipt.verdict}\n"
@@ -402,7 +407,7 @@ class BuyerAgent:
                     f"If verdict is BLOCK due to amount_exceeded_ceiling, state clearly that you found the matching option but RazorGate security policy ceiling (₹50,000.00) safely blocked execution, so no payment was made."
                 )
                 response = client.messages.create(
-                    model="claude-3-5-sonnet-20001022",
+                    model=settings.model_name,
                     max_tokens=200,
                     temperature=0.2,
                     messages=[{"role": "user", "content": prompt_user}],

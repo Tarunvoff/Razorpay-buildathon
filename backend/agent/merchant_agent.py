@@ -63,7 +63,10 @@ class MerchantAgent:
 
         if self.api_key:
             try:
-                client = anthropic.Anthropic(api_key=self.api_key)
+                client_kwargs: Dict[str, Any] = {"api_key": self.api_key}
+                if settings.base_url:
+                    client_kwargs["base_url"] = settings.base_url
+                client = anthropic.Anthropic(**client_kwargs)
                 prompt = (
                     f"Merchant Name: {self.merchant_name}\n"
                     f"Categories: {categories}\n"
@@ -71,7 +74,7 @@ class MerchantAgent:
                     f"Write a 1-sentence professional merchant capability disclosure description for an AgentCard in an A2A commerce protocol."
                 )
                 res = client.messages.create(
-                    model="claude-3-5-sonnet-20001022",
+                    model=settings.model_name,
                     max_tokens=100,
                     temperature=0.2,
                     messages=[{"role": "user", "content": prompt}],
