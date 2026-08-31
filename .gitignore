@@ -44,3 +44,7 @@ tmp_*/
 out.txt
 final_output.txt
 *.tmp
+
+# SQLite database files
+*.db
+

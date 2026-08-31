@@ -54,6 +54,9 @@ async def lifespan(app: FastAPI):
     init_db()
     broadcaster = get_broadcaster()
     app.state.broadcaster = broadcaster
+    print(f"\n==================================================")
+    print(f"[RazorGate Startup] SSE Broadcaster active: {broadcaster.__class__.__name__}")
+    print(f"==================================================\n")
     try:
         yield
     finally:
