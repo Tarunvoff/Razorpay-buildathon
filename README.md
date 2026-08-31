@@ -33,11 +33,11 @@ $$\text{risk\_weight} = 1.0 - \text{health\_score}$$
 - Calls without a valid token or with an expired token return `403 Forbidden`.
 
 ### Real Agent Cost & Latency Profile
-- **Measured End-to-End Latency**: Wall-clock time across 5 varied intent benchmarks ranges from **0.11s to 2.16s** (average **~0.66s**), accounting for network RTT to the Anthropic API endpoint and Claude reasoning generation time.
+- **Measured End-to-End Latency**: Wall-clock time across 5 varied intent benchmarks ranges from **0.00s to 1.46s** (average **~0.45s**), accounting for network RTT to the Anthropic API endpoint and Claude reasoning generation time.
 - **LLM Invocations per Run**: 1 to 2 Claude API calls (`claude-3-5-sonnet-20001022`, `temperature=0.2`) per full transaction lifecycle (Buyer Agent tool-use loop + Merchant Agent negotiation copy generation across the 6-step A2A protocol).
-- **Token Footprint**: ~700 to 1,100 total tokens per full A2A transaction (~450–750 input tokens, ~150–350 output tokens).
-- **Estimated Operational Cost**: ~\$0.002 to \$0.004 USD per free-form execution run (~₹0.20 to ₹0.35 INR).
-- **Per-Session Guardrail Rationale**: This operational token cost and LLM latency profile is the direct rationale for enforcing the 10 free-form runs per-session guardrail in the interactive walkthrough UI — protecting API quota bounds and preventing runaway automated burst loops while giving judges full interactive evaluation freedom.
+- **Token Footprint**: **900 to 1,060 total tokens** per full A2A transaction (~645–745 input tokens, ~255–315 output tokens).
+- **Estimated Operational Cost**: **~$0.0057 to $0.0069 USD** per free-form execution run (**~₹0.48 to ₹0.58 INR**).
+- **Per-Session Guardrail Rationale**: At an average of **0.45s** and **~980 tokens** per run, the 10-run session cap keeps a single judge's exploration bounded to roughly **4.5 seconds of total agent execution latency** and a predictable API cost ceiling of **~$0.06 USD (~₹5.30 INR)** per session.
 - **Anti-Hallucination Guarantee**: Hard system-prompt constraints enforce that comparative reasoning strictly references SKUs, specs, and prices returned directly in `search_catalog` tool output.
 
 
