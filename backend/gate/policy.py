@@ -35,8 +35,14 @@ class PolicyDecision:
         return asdict(self)
 
 
-def load_policy_config() -> Dict[str, Any]:
-    """Loads the policy configuration YAML if present, with defaults."""
+def load_policy_config(merchant_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Loads the policy configuration YAML if present, with defaults.
+
+    If merchant_id is provided and matches an entry in the ``merchants:`` section
+    of policy.yaml, per-merchant overrides are merged on top of global defaults.
+    Unknown merchant_ids silently fall back to global defaults.
+    """
     default_config = {
         "max_order_amount_inr": 50000.0,
         "max_calls_per_agent_per_window": 5,
@@ -49,10 +55,18 @@ def load_policy_config() -> Dict[str, Any]:
         try:
             with open(POLICY_CONFIG_PATH, "r", encoding="utf-8") as f:
                 loaded = yaml.safe_load(f) or {}
-                default_config.update(loaded)
+                # Apply global keys (non-merchants section)
+                global_overrides = {k: v for k, v in loaded.items() if k != "merchants"}
+                default_config.update(global_overrides)
+                # Apply per-merchant overrides if merchant_id matches
+                if merchant_id:
+                    merchants = loaded.get("merchants", {}) or {}
+                    merchant_cfg = merchants.get(merchant_id, {}) or {}
+                    default_config.update(merchant_cfg)
         except Exception:
             pass
     return default_config
+
 
 
 def evaluate_policy(
@@ -60,6 +74,7 @@ def evaluate_policy(
     apiris_score: Dict[str, Any],
     behavior_signal: Optional[Dict[str, Any]] = None,
     config: Optional[Dict[str, Any]] = None,
+    merchant_id: Optional[str] = None,
 ) -> PolicyDecision:
     """
     Evaluates payments-native rules against:
@@ -72,8 +87,11 @@ def evaluate_policy(
     2. High Apiris risk (risk_weight >= apiris_risk_block) -> BLOCK
     3. Moderate Apiris risk (risk_weight >= apiris_risk_flag) OR Behavior Flag -> FLAG
     4. Otherwise -> ALLOW
+
+    If merchant_id is provided, per-merchant policy overrides from policy.yaml
+    are applied on top of global defaults before evaluation.
     """
-    cfg = config or load_policy_config()
+    cfg = config or load_policy_config(merchant_id=merchant_id)
     max_order_inr = float(cfg.get("max_order_amount_inr", 50000.0))
     risk_block_thresh = float(cfg.get("apiris_risk_block", 0.80))
     risk_flag_thresh = float(cfg.get("apiris_risk_flag", 0.40))

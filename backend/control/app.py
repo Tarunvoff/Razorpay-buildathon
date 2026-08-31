@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 import json
 from pathlib import Path
 import sys
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 # Ensure project root is in sys.path
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
@@ -28,31 +28,37 @@ from backend.audit.db import (
     record_webhook_processed,
     update_decision_webhook_status,
 )
+from backend.broadcaster import get_broadcaster
 from backend.config import settings
 from backend.gate import adapter
 from backend.gate.behavior import behavior_analyzer
 from backend.gate.policy import load_policy_config
 from backend.payments import razorpay_client
 
-# Active SSE subscriber queues for real-time live decision streaming
-_sse_subscribers: Set[asyncio.Queue] = set()
+# Module-level fallback broadcaster â€” used by tests (TestClient without lifespan)
+# and as a safety net if app.state.broadcaster is somehow not set.
+from backend.broadcaster import InMemoryBroadcaster as _InMemoryBroadcaster
+_default_broadcaster = _InMemoryBroadcaster()
 
 
-
-async def broadcast_decision_event(event_data: Dict[str, Any]):
-    """Broadcasts a decision event to all connected SSE clients."""
-    payload = f"data: {json.dumps(event_data)}\n\n"
-    for queue in list(_sse_subscribers):
-        try:
-            queue.put_nowait(payload)
-        except Exception:
-            _sse_subscribers.discard(queue)
+def _get_broadcaster(request):
+    """Returns the broadcaster from app.state, falling back to the module-level default."""
+    try:
+        return request.app.state.broadcaster
+    except AttributeError:
+        return _default_broadcaster
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    yield
+    broadcaster = get_broadcaster()
+    app.state.broadcaster = broadcaster
+    try:
+        yield
+    finally:
+        await broadcaster.close()
+
 
 
 app = FastAPI(
@@ -76,13 +82,13 @@ class PaymentCheckRequest(BaseModel):
     Public payment check request payload.
 
     UNIT CONVENTION:
-    `amount`: Integer amount in PAISE (Razorpay native currency subunit, e.g. 50000 = ₹500.00).
+    `amount`: Integer amount in PAISE (Razorpay native currency subunit, e.g. 50000 = â‚¹500.00).
     `currency`: ISO currency code, default 'INR'.
     """
 
     amount: int = Field(
         ...,
-        description="Amount in paise (Razorpay native subunit, e.g. 50000 = ₹500.00 INR)",
+        description="Amount in paise (Razorpay native subunit, e.g. 50000 = â‚¹500.00 INR)",
     )
     currency: str = Field(default="INR", description="ISO currency code")
     merchant_id: Optional[str] = None
@@ -103,7 +109,7 @@ class CreateOrderRequest(BaseModel):
     """
 
     agent_id: str
-    amount_paise: int = Field(..., description="Amount in paise (e.g. 50000 = ₹500.00 INR)")
+    amount_paise: int = Field(..., description="Amount in paise (e.g. 50000 = â‚¹500.00 INR)")
     receipt: str
     allow_token: str
     merchant_id: Optional[str] = "merchant_default"
@@ -157,29 +163,16 @@ def list_decisions(
 
 
 @app.get("/decisions/stream")
-async def stream_decisions():
+async def stream_decisions(request: Request):
     """
     Real-time Server-Sent Events (SSE) stream for live decision feeds and audit monitoring.
+    Backed by InMemoryBroadcaster (default) or RedisBroadcaster (when REDIS_URL is set),
+    enabling cross-process fanout across multiple uvicorn workers.
     """
-    queue: asyncio.Queue = asyncio.Queue()
-    _sse_subscribers.add(queue)
-
-    async def event_generator():
-        try:
-            # Initial connection event
-            yield f"data: {json.dumps({'type': 'connected', 'service': 'razorgate'})}\n\n"
-            while True:
-                try:
-                    # Wait for next broadcast event or send keepalive heartbeat every 15s
-                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
-                    yield event
-                except asyncio.TimeoutError:
-                    yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
-        finally:
-            _sse_subscribers.discard(queue)
+    broadcaster = _get_broadcaster(request)
 
     return StreamingResponse(
-        event_generator(),
+        broadcaster.subscribe_iter(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -201,7 +194,7 @@ def get_decision(decision_id: int):
 
 
 @app.post("/gate/check")
-async def check_payment(req: PaymentCheckRequest):
+async def check_payment(request: Request, req: PaymentCheckRequest):
     """
     Evaluates an agent payment call through Apiris scoring and RazorGate policy,
     persists the decision record to the SQLite audit ledger, broadcasts live SSE,
@@ -256,8 +249,8 @@ async def check_payment(req: PaymentCheckRequest):
         "audit_id": row_id,
     }
 
-    # Broadcast live decision event to SSE subscribers
-    await broadcast_decision_event({
+    # Broadcast live decision event via broadcaster (InMemory or Redis)
+    await _get_broadcaster(request).publish({
         "type": "decision",
         "audit_id": row_id,
         "agent_id": agent_id,
@@ -368,7 +361,7 @@ def create_order(req: CreateOrderRequest):
 
 
 @app.post("/orders/verify")
-async def verify_order_signature(req: VerifyOrderRequest):
+async def verify_order_signature(request: Request, req: VerifyOrderRequest):
     """
     Server-side HMAC-SHA256 signature verification for Razorpay payment callback.
     Independently recomputes HMAC signature and verifies against razorpay_signature.
@@ -405,8 +398,8 @@ async def verify_order_signature(req: VerifyOrderRequest):
         "order": order_details,
     }
 
-    # Broadcast payment_verified SSE event
-    await broadcast_decision_event({
+    # Broadcast payment_verified SSE event via broadcaster
+    await _get_broadcaster(request).publish({
         "type": "payment_verified",
         "audit_id": req.audit_id,
         "razorpay_order_id": req.razorpay_order_id,
@@ -466,7 +459,7 @@ async def handle_razorpay_webhook(request: Request):
         status_label = "confirmed_paid"
         audit_id = update_decision_webhook_status(razorpay_order_id, status_label) if razorpay_order_id else None
 
-        await broadcast_decision_event({
+        await _get_broadcaster(request).publish({
             "type": "webhook_payment_captured",
             "event_id": event_id,
             "event": event,
@@ -489,7 +482,7 @@ async def handle_razorpay_webhook(request: Request):
         status_label = "payment_failed"
         audit_id = update_decision_webhook_status(razorpay_order_id, status_label) if razorpay_order_id else None
 
-        await broadcast_decision_event({
+        await _get_broadcaster(request).publish({
             "type": "webhook_payment_failed",
             "event_id": event_id,
             "event": event,
@@ -518,9 +511,9 @@ async def handle_razorpay_webhook(request: Request):
 
 
 @app.get("/gate/policy")
-def get_policy():
-    """Returns current active payments policy rules."""
-    return load_policy_config()
+def get_policy(merchant_id: Optional[str] = Query(default=None, description="Merchant ID to inspect effective policy for")):
+    """Returns current active payments policy rules, optionally merged with per-merchant overrides."""
+    return load_policy_config(merchant_id=merchant_id)
 
 
 @app.get("/gate/behavior/agent/{agent_id}")
@@ -550,7 +543,7 @@ class AskAgentRequest(BaseModel):
 
 @app.post("/agent/ask")
 @app.post("/demo/ask")
-async def ask_buyer_agent(req: AskAgentRequest):
+async def ask_buyer_agent(request: Request, req: AskAgentRequest):
 
     """
     Executes an open-ended free-form AI Buyer Agent transaction:
@@ -587,8 +580,8 @@ async def ask_buyer_agent(req: AskAgentRequest):
 
     explanation = buyer.explain_outcome(receipt)
 
-    # Broadcast event to SSE subscribers
-    await broadcast_decision_event({
+    # Broadcast event via broadcaster (InMemory or Redis)
+    await _get_broadcaster(request).publish({
         "type": "decision",
         "audit_id": receipt.audit_id,
         "agent_id": buyer.agent_id,
@@ -614,12 +607,12 @@ async def ask_buyer_agent(req: AskAgentRequest):
 
 
 @app.post("/demo/run-scenario")
-async def run_scenario(req: RunScenarioRequest):
+async def run_scenario(request: Request, req: RunScenarioRequest):
     """
     Executes a real end-to-end A2A protocol transaction scenario:
-    1. 'clean_allow': NVIDIA H100 GPU compute (₹299.00) -> ALLOW -> Real Razorpay Order.
+    1. 'clean_allow': NVIDIA H100 GPU compute (â‚¹299.00) -> ALLOW -> Real Razorpay Order.
     2. 'behavior_flag': High-frequency session burst -> FLAG -> Safe completion.
-    3. 'forced_failure_block': Enterprise support (₹65,000 > ₹50,000 ceiling) -> Deterministic BLOCK -> Zero orders.
+    3. 'forced_failure_block': Enterprise support (â‚¹65,000 > â‚¹50,000 ceiling) -> Deterministic BLOCK -> Zero orders.
     """
     import time
     from backend.agent.buyer_agent import BuyerAgent
@@ -679,8 +672,8 @@ async def run_scenario(req: RunScenarioRequest):
 
     explanation = buyer.explain_outcome(receipt)
 
-    # Broadcast event to SSE subscribers
-    await broadcast_decision_event({
+    # Broadcast event via broadcaster (InMemory or Redis)
+    await _get_broadcaster(request).publish({
         "type": "decision",
         "audit_id": receipt.audit_id,
         "agent_id": buyer.agent_id,
@@ -745,4 +738,5 @@ def get_metrics_summary():
         "policy_ceiling_inr": 50000.0,
         "token_ttl_seconds": 30,
     }
+
 

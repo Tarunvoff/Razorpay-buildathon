@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     claude_model: Optional[str] = None
     llm_provider: str = "claude"
     database_url: Optional[str] = None
+    # Redis URL for cross-process SSE fanout (e.g. redis://localhost:6379/0 or Upstash rediss://)
+    # When set: RedisBroadcaster is used (cross-process delivery).
+    # When absent: InMemoryBroadcaster is the fallback (single-process, zero-dependency).
+    redis_url: Optional[str] = None
 
     @property
     def api_key(self) -> str:

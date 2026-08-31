@@ -913,3 +913,89 @@ def test_behavior_analyzer_thread_safety():
     flagged_results = [r for r in results if r["flag"] is True]
     assert len(flagged_results) == 5, f"Expected exactly 5 flagged results (counts 6-10), got {len(flagged_results)}"
 
+
+
+# ─────────────────────────────────────────────────────────────────
+# Multi-Tenancy Policy Tests
+# ─────────────────────────────────────────────────────────────────
+
+def test_multitenancy_budget_saas_blocks_above_merchant_ceiling():
+    """
+    merchant_budget_saas has a Rs.5,000 ceiling.
+    A JetBrains license at Rs.28,900 passes for merchant_razorgate_cloud (Rs.50k ceiling)
+    but is BLOCKED for merchant_budget_saas.
+    Proves per-merchant ceiling enforcement is applied correctly in evaluate_policy().
+    """
+    from backend.gate.policy import evaluate_policy, load_policy_config
+
+    amount_paise = 2890000  # Rs.28,900 - under global ceiling, over budget_saas ceiling
+
+    clean_apiris = {"risk_weight": 0.0, "confidence": 1.0}
+    clean_behavior = {"flag": False, "reasons": [], "session_call_count": 1}
+    call = {"amount": amount_paise, "currency": "INR"}
+
+    # Default merchant: should ALLOW (Rs.28,900 < Rs.50,000 ceiling)
+    result_default = evaluate_policy(call, clean_apiris, clean_behavior, merchant_id="merchant_razorgate_cloud")
+    assert result_default.verdict == "ALLOW", (
+        f"merchant_razorgate_cloud should ALLOW Rs.28,900 but got {result_default.verdict}"
+    )
+
+    # Budget SaaS merchant: should BLOCK (Rs.28,900 > Rs.5,000 ceiling)
+    result_budget = evaluate_policy(call, clean_apiris, clean_behavior, merchant_id="merchant_budget_saas")
+    assert result_budget.verdict == "BLOCK", (
+        f"merchant_budget_saas should BLOCK Rs.28,900 (ceiling Rs.5,000) but got {result_budget.verdict}"
+    )
+    assert result_budget.primary_factor == "amount_exceeded_ceiling"
+
+
+def test_multitenancy_enterprise_merchant_allows_above_default_ceiling():
+    """
+    merchant_enterprise has a Rs.200,000 ceiling.
+    A Rs.65,000 transaction that BLOCKS for the default merchant (Rs.50k ceiling)
+    is ALLOWED for merchant_enterprise.
+    Proves elevated-ceiling merchants work correctly.
+    """
+    from backend.gate.policy import evaluate_policy
+
+    amount_paise = 6500000  # Rs.65,000 - above default Rs.50k ceiling, under enterprise Rs.200k ceiling
+
+    clean_apiris = {"risk_weight": 0.0, "confidence": 1.0}
+    clean_behavior = {"flag": False, "reasons": [], "session_call_count": 1}
+    call = {"amount": amount_paise, "currency": "INR"}
+
+    # Default merchant: BLOCK (Rs.65,000 > Rs.50,000)
+    result_default = evaluate_policy(call, clean_apiris, clean_behavior, merchant_id="merchant_razorgate_cloud")
+    assert result_default.verdict == "BLOCK", (
+        f"merchant_razorgate_cloud should BLOCK Rs.65,000 but got {result_default.verdict}"
+    )
+
+    # Enterprise merchant: ALLOW (Rs.65,000 < Rs.200,000)
+    result_enterprise = evaluate_policy(call, clean_apiris, clean_behavior, merchant_id="merchant_enterprise")
+    assert result_enterprise.verdict == "ALLOW", (
+        f"merchant_enterprise should ALLOW Rs.65,000 (ceiling Rs.200,000) but got {result_enterprise.verdict}"
+    )
+
+
+def test_multitenancy_unknown_merchant_falls_back_to_global_defaults():
+    """
+    An unrecognised merchant_id should silently fall back to global policy defaults
+    (Rs.50,000 ceiling) without raising an error.
+    """
+    from backend.gate.policy import evaluate_policy, load_policy_config
+
+    # Global config should load without error for unknown merchant
+    cfg = load_policy_config(merchant_id="merchant_does_not_exist_xyz")
+    assert cfg["max_order_amount_inr"] == 50000.0, (
+        f"Unknown merchant should fall back to global Rs.50k ceiling, got {cfg['max_order_amount_inr']}"
+    )
+
+    # Policy evaluation should also work correctly
+    clean_apiris = {"risk_weight": 0.0, "confidence": 1.0}
+    clean_behavior = {"flag": False, "reasons": [], "session_call_count": 1}
+    result = evaluate_policy(
+        {"amount": 2990000, "currency": "INR"},
+        clean_apiris, clean_behavior,
+        merchant_id="merchant_does_not_exist_xyz"
+    )
+    # Rs.29,900 is under the Rs.50k global ceiling - should ALLOW
+    assert result.verdict == "ALLOW"

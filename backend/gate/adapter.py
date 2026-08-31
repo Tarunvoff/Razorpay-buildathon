@@ -219,10 +219,12 @@ def check(payment_call: dict) -> GateResult:
 
 
     # 3. Evaluate combined payments-native policy rules
+    merchant_id_for_policy = payment_call.get("merchant_id") or None
     policy_decision: PolicyDecision = evaluate_policy(
         payment_call=payment_call,
         apiris_score=apiris_summary,
         behavior_signal=behavior_signal,
+        merchant_id=merchant_id_for_policy,
     )
 
     # 4. Generate structured explanation record

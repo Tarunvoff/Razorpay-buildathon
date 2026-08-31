@@ -17,3 +17,35 @@ apiris_risk_block: 0.80
 
 # Rule 3: risk_weight >= apiris_risk_flag -> FLAG
 apiris_risk_flag: 0.40
+
+# ─────────────────────────────────────────────────────────────────
+# Per-Merchant Policy Overrides
+# Each key maps to a merchant_id passed in the request.
+# Only keys listed here override the global defaults above.
+# Unrecognised merchant_ids fall back to global defaults.
+# ─────────────────────────────────────────────────────────────────
+merchants:
+
+  # Default demo merchant — same as global defaults (explicit for clarity)
+  merchant_razorgate_cloud:
+    max_order_amount_inr: 50000.0
+    max_calls_per_agent_per_window: 5
+
+  # Budget SaaS merchant — restricted ceiling (₹5,000) and tighter rate limits.
+  # Demo use: trigger a clean_allow scenario as this merchant to show it BLOCKS
+  # the same ₹299 H100 GPU purchase that passes under merchant_razorgate_cloud
+  # only if the order exceeds the merchant's ceiling. More useful: run a
+  # software license at ₹28,900 — passes for the default merchant, blocks here.
+  # Actual demo value: shows per-merchant ceiling enforcement live.
+  merchant_budget_saas:
+    max_order_amount_inr: 5000.0
+    max_calls_per_agent_per_window: 3
+    apiris_risk_flag: 0.30  # more sensitive flagging for budget tier
+
+  # Enterprise merchant — elevated ceiling for high-value deployments (₹2,00,000).
+  # Demo use: show that the same enterprise support SKU (₹65,000) that BLOCKS
+  # for merchant_razorgate_cloud (ceiling ₹50k) is ALLOWED for merchant_enterprise.
+  merchant_enterprise:
+    max_order_amount_inr: 200000.0
+    max_calls_per_agent_per_window: 10
+

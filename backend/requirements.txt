@@ -7,6 +7,8 @@ pydantic
 pydantic-settings
 pyyaml
 sqlite-utils
+sqlalchemy
+redis[asyncio]
 pytest
 pytest-asyncio
 httpx

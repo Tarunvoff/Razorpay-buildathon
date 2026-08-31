@@ -1,6 +1,16 @@
-import pytest
+﻿import pytest
 import asyncio
+from unittest.mock import MagicMock
 from backend.control.app import ask_buyer_agent, AskAgentRequest
+from backend.broadcaster import InMemoryBroadcaster
+
+
+def _make_mock_request():
+    """Creates a minimal mock request with app.state.broadcaster set."""
+    mock_request = MagicMock()
+    mock_request.app.state.broadcaster = InMemoryBroadcaster()
+    return mock_request
+
 
 def test_back_to_back_scenario_amounts():
     """
@@ -8,9 +18,11 @@ def test_back_to_back_scenario_amounts():
     create Razorpay orders whose amount field matches their own selected SKU price.
     Prevents state-bleed / amount mismatch regressions between consecutive runs.
     """
-    # 1. Run Free-Form Intent for cheap object storage (Starter 100GB SKU = ₹199.00 / 19900 paise)
+    mock_request = _make_mock_request()
+
+    # 1. Run Free-Form Intent for cheap object storage (Starter 100GB SKU = â‚¹199.00 / 19900 paise)
     req1 = AskAgentRequest(intent="cheap object storage for side project", max_budget_inr=5000.0)
-    res1 = asyncio.run(ask_buyer_agent(req1))
+    res1 = asyncio.run(ask_buyer_agent(mock_request, req1))
     
     receipt1 = res1["receipt"]
     verdict1 = getattr(receipt1, "verdict", None) or receipt1.get("verdict")
@@ -25,9 +37,9 @@ def test_back_to_back_scenario_amounts():
     order1_amount = getattr(order1, "amount", None) or (order1.get("amount") if isinstance(order1, dict) else None)
     assert order1_amount == 19900
     
-    # 2. Run Free-Form Intent for high-end GPU compute (H100 GPU SKU = ₹299.00 / 29900 paise)
+    # 2. Run Free-Form Intent for high-end GPU compute (H100 GPU SKU = â‚¹299.00 / 29900 paise)
     req2 = AskAgentRequest(intent="NVIDIA H100 SXM 80GB GPU instance for fine tuning", max_budget_inr=5000.0)
-    res2 = asyncio.run(ask_buyer_agent(req2))
+    res2 = asyncio.run(ask_buyer_agent(mock_request, req2))
     
     receipt2 = res2["receipt"]
     verdict2 = getattr(receipt2, "verdict", None) or receipt2.get("verdict")
@@ -49,4 +61,3 @@ def test_back_to_back_scenario_amounts():
 
 if __name__ == "__main__":
     test_back_to_back_scenario_amounts()
-
