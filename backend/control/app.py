@@ -100,6 +100,8 @@ class CreateOrderRequest(BaseModel):
     amount_paise: int = Field(..., description="Amount in paise (e.g. 50000 = ₹500.00 INR)")
     receipt: str
     allow_token: str
+    merchant_id: Optional[str] = "merchant_default"
+    sku: Optional[str] = "sku_default"
     currency: str = "INR"
     audit_id: Optional[int] = Field(
         default=None,
@@ -304,24 +306,36 @@ def create_order(req: CreateOrderRequest):
         # Serves as a fast-path defense-in-depth layer on top of Razorpay's API guarantee.
         # Resolves audit decision ID -> existing Razorpay order ID to prevent duplicate order generation
         # on retried agent mandate submissions, returning the existing order object deterministically.
+        merchant_id = req.merchant_id or "merchant_default"
+        sku = req.sku or (req.notes.get("sku") if req.notes else None) or "sku_default"
         if req.audit_id:
             record = get_decision_by_id(req.audit_id)
-            if record and record.get("razorpay_order_id"):
-                # Fetch existing order instead of creating a duplicate
-                existing_order = razorpay_client.fetch_order(record["razorpay_order_id"])
-                return {
-                    "status": "created",
-                    "order": existing_order,
-                    "audit_id": req.audit_id,
-                    "key_id": settings.razorpay_key_id,
-                    "idempotency_hit": True
-                }
+            if record:
+                if record.get("razorpay_order_id"):
+                    # Fetch existing order instead of creating a duplicate
+                    existing_order = razorpay_client.fetch_order(record["razorpay_order_id"])
+                    return {
+                        "status": "created",
+                        "order": existing_order,
+                        "audit_id": req.audit_id,
+                        "key_id": settings.razorpay_key_id,
+                        "idempotency_hit": True
+                    }
+                evidence = record.get("evidence", {})
+                orig_req = evidence.get("request", {})
+                if orig_req:
+                    if merchant_id == "merchant_default" and orig_req.get("merchant_id"):
+                        merchant_id = orig_req["merchant_id"]
+                    if sku == "sku_default":
+                        sku = orig_req.get("sku") or (orig_req.get("notes") or {}).get("sku") or sku
 
         order_res = razorpay_client.create_gated_order(
             agent_id=req.agent_id,
             amount_paise=req.amount_paise,
             receipt=req.receipt,
             allow_token=req.allow_token,
+            merchant_id=merchant_id,
+            sku=sku,
             currency=req.currency,
             notes=req.notes,
             idempotency_key=str(req.audit_id) if req.audit_id else None,

@@ -29,6 +29,7 @@ $$\text{risk\_weight} = 1.0 - \text{health\_score}$$
 
 ### Cryptographic Gating (HMAC ALLOW Token)
 - `POST /orders` strictly requires a server-issued HMAC-SHA256 `allow_token` minted with a short-lived **~30s TTL** immediately upon an `ALLOW` verdict from `POST /gate/check`.
+- **Cryptographic Payload Scoping**: `mint_allow_token` and `verify_allow_token` cryptographically bind `agent_id`, `merchant_id`, `sku`, `amount_paise`, `receipt`, and `timestamp` into the HMAC-SHA256 signature string (`agent_id:merchant_id:sku:amount_paise:receipt:ts`), guaranteeing that a token minted for SKU-A cannot be replayed or presented for SKU-B or a different merchant at the same price.
 - Calls without a valid token or with an expired token return `403 Forbidden`.
 
 ### Real Agent Cost & Latency Profile

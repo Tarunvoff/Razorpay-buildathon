@@ -31,15 +31,18 @@ def mint_allow_token(
     agent_id: str,
     amount_paise: int,
     receipt: str,
+    merchant_id: str = "merchant_default",
+    sku: str = "sku_default",
     timestamp: Optional[float] = None,
 ) -> str:
     """
     Mints a cryptographically signed HMAC-SHA256 ALLOW token.
     Token format: "{unix_timestamp}.{hex_digest_signature}"
+    Signed payload: "{agent_id}:{merchant_id}:{sku}:{amount_paise}:{receipt}:{unix_timestamp}"
     """
     ts = int(timestamp if timestamp is not None else time.time())
     secret = get_token_secret().encode("utf-8")
-    payload = f"{agent_id}:{amount_paise}:{receipt}:{ts}".encode("utf-8")
+    payload = f"{agent_id}:{merchant_id}:{sku}:{amount_paise}:{receipt}:{ts}".encode("utf-8")
     sig = hmac.new(secret, payload, hashlib.sha256).hexdigest()
     return f"{ts}.{sig}"
 
@@ -49,13 +52,15 @@ def verify_allow_token(
     agent_id: str,
     amount_paise: int,
     receipt: str,
+    merchant_id: str = "merchant_default",
+    sku: str = "sku_default",
     max_age_seconds: float = 90.0,
     current_time: Optional[float] = None,
 ) -> bool:
     """
     Verifies that the ALLOW token:
     1. Has valid format {timestamp}.{signature}
-    2. Matches HMAC signature over (agent_id, amount_paise, receipt, timestamp)
+    2. Matches HMAC signature over (agent_id, merchant_id, sku, amount_paise, receipt, timestamp)
     3. Was generated within the allowable TTL window (default: 90s)
     """
     if not token or "." not in token:
@@ -70,7 +75,7 @@ def verify_allow_token(
     now = current_time if current_time is not None else time.time()
 
     secret = get_token_secret().encode("utf-8")
-    payload = f"{agent_id}:{amount_paise}:{receipt}:{ts}".encode("utf-8")
+    payload = f"{agent_id}:{merchant_id}:{sku}:{amount_paise}:{receipt}:{ts}".encode("utf-8")
     expected_sig = hmac.new(secret, payload, hashlib.sha256).hexdigest()
 
     if not hmac.compare_digest(sig, expected_sig):
@@ -113,6 +118,8 @@ def create_gated_order(
     amount_paise: int,
     receipt: str,
     allow_token: str,
+    merchant_id: str = "merchant_default",
+    sku: str = "sku_default",
     currency: str = "INR",
     notes: Optional[Dict[str, Any]] = None,
     idempotency_key: Optional[str] = None,
@@ -121,9 +128,17 @@ def create_gated_order(
     Gated order creation: validates the server-issued ALLOW token before calling Razorpay.
     Raises TokenInvalidError or TokenExpiredError if token is invalid, forged, or expired.
     """
+    if notes:
+        if merchant_id == "merchant_default" and "merchant_id" in notes:
+            merchant_id = notes["merchant_id"]
+        if sku == "sku_default" and "sku" in notes:
+            sku = notes["sku"]
+
     verify_allow_token(
         token=allow_token,
         agent_id=agent_id,
+        merchant_id=merchant_id,
+        sku=sku,
         amount_paise=amount_paise,
         receipt=receipt,
     )

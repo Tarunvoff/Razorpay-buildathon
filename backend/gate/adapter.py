@@ -242,9 +242,13 @@ def check(payment_call: dict) -> GateResult:
     # 5. Mint short-lived ALLOW token if verdict is ALLOW
     allow_token = None
     receipt = payment_call.get("receipt", f"rcpt_{int(time.time())}")
+    merchant_id = payment_call.get("merchant_id") or "merchant_default"
+    sku = payment_call.get("sku") or (payment_call.get("notes") or {}).get("sku") or "sku_default"
     if policy_decision.verdict == "ALLOW":
         allow_token = mint_allow_token(
             agent_id=agent_id,
+            merchant_id=merchant_id,
+            sku=sku,
             amount_paise=amount_paise,
             receipt=receipt,
         )

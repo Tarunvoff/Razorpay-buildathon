@@ -496,6 +496,66 @@ def test_allow_token_mismatch_and_replay_defense():
     assert "token_invalid" in res_receipt_mismatch.json()["detail"]
 
 
+def test_allow_token_sku_scoping_rejection():
+    """
+    Proves that an ALLOW token minted specifically for (merchant='merchant_a', sku='sku_l4')
+    is REJECTED with 403 Forbidden / TokenInvalidError if presented for a different SKU ('sku_h100')
+    or a different merchant ('merchant_b') at the exact same agent, amount, and receipt.
+    """
+    client = TestClient(app)
+    agent_id = "agent_scoping_test"
+    amount_paise = 29900
+    receipt = "rcpt_scoping_1"
+
+    # Mint token explicitly bound to merchant_a and sku_l4
+    bound_token = razorpay_client.mint_allow_token(
+        agent_id=agent_id,
+        amount_paise=amount_paise,
+        receipt=receipt,
+        merchant_id="merchant_a",
+        sku="sku_l4",
+    )
+
+    # 1. Matching merchant and SKU succeeds verification
+    assert razorpay_client.verify_allow_token(
+        token=bound_token,
+        agent_id=agent_id,
+        amount_paise=amount_paise,
+        receipt=receipt,
+        merchant_id="merchant_a",
+        sku="sku_l4",
+    ) is True
+
+    # 2. Presentation for mismatched SKU fails via direct function call
+    try:
+        razorpay_client.verify_allow_token(
+            token=bound_token,
+            agent_id=agent_id,
+            amount_paise=amount_paise,
+            receipt=receipt,
+            merchant_id="merchant_a",
+            sku="sku_h100",  # Mismatched SKU!
+        )
+        assert False, "Should raise TokenInvalidError on SKU mismatch"
+    except razorpay_client.TokenInvalidError:
+        pass
+
+    # 3. Presentation via HTTP POST /orders with mismatched SKU returns 403 Forbidden
+    res_sku_mismatch = client.post(
+        "/orders",
+        json={
+            "agent_id": agent_id,
+            "amount_paise": amount_paise,
+            "receipt": receipt,
+            "merchant_id": "merchant_a",
+            "sku": "sku_h100",  # Mismatched SKU
+            "allow_token": bound_token,
+        },
+    )
+    assert res_sku_mismatch.status_code == 403
+    assert "token_invalid" in res_sku_mismatch.json()["detail"]
+
+
 def test_orders_endpoint_creates_order_and_links_audit_id():
     """
     Phase 6 Test 3 (Audit-to-Order Link):
