@@ -203,10 +203,16 @@ class BuyerAgent:
                     llm_reasoning = parsed.get("reasoning", text)
                     target = next((o for o in offers if o.sku == selected_sku), None)
                     if target:
-                        self.log_step("selection_reasoning", {"selected_sku": target.sku, "reasoning": llm_reasoning})
+                        self.log_step("selection_reasoning", {
+                            "selected_sku": target.sku,
+                            "reasoning": llm_reasoning,
+                            "execution_mode": "live_claude_api",
+                            "model": "claude-3-5-sonnet-20001022",
+                        })
                         return target, llm_reasoning
             except Exception as e:
                 # Log API error and proceed with deterministic fallback
+                self.log_step("llm_api_error", {"error": str(e), "execution_mode": "deterministic_fallback"})
                 pass
 
         # Deterministic comparative reasoning fallback (strictly anti-hallucinatory)
@@ -263,7 +269,11 @@ class BuyerAgent:
                 f"within budget ₹{self.max_budget_paise / 100:.2f}{comp_text}."
             )
 
-        self.log_step("selection_reasoning", {"selected_sku": selected.sku, "reasoning": reasoning})
+        self.log_step("selection_reasoning", {
+            "selected_sku": selected.sku,
+            "reasoning": reasoning,
+            "execution_mode": "deterministic_fallback",
+        })
         return selected, reasoning
 
     def issue_mandate(

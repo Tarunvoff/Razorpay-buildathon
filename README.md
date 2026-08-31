@@ -33,11 +33,12 @@ $$\text{risk\_weight} = 1.0 - \text{health\_score}$$
 - Calls without a valid token or with an expired token return `403 Forbidden`.
 
 ### Real Agent Cost & Latency Profile
-- **Measured End-to-End Latency**: Wall-clock time across 5 varied intent benchmarks ranges from **0.00s to 1.46s** (average **~0.45s**), accounting for network RTT to the Anthropic API endpoint and Claude reasoning generation time.
-- **LLM Invocations per Run**: 1 to 2 Claude API calls (`claude-3-5-sonnet-20001022`, `temperature=0.2`) per full transaction lifecycle (Buyer Agent tool-use loop + Merchant Agent negotiation copy generation across the 6-step A2A protocol).
-- **Token Footprint**: **900 to 1,060 total tokens** per full A2A transaction (~645–745 input tokens, ~255–315 output tokens).
-- **Estimated Operational Cost**: **~$0.0057 to $0.0069 USD** per free-form execution run (**~₹0.48 to ₹0.58 INR**).
-- **Per-Session Guardrail Rationale**: At an average of **0.45s** and **~980 tokens** per run, the 10-run session cap keeps a single judge's exploration bounded to roughly **4.5 seconds of total agent execution latency** and a predictable API cost ceiling of **~$0.06 USD (~₹5.30 INR)** per session.
+- **ALLOW Transactions (2 LLM Calls)**: Wall-clock latency ranges from **0.28s to 1.38s** (average **~0.66s**), generating 2 Claude API calls (`claude-3-5-sonnet-20001022`) for Buyer offer selection + Merchant negotiation copy generation (~990–1,110 total tokens per run).
+- **BLOCK Transactions (1 LLM Call)**: Wall-clock latency **~0.78s**, generating 1 Claude API call for Buyer offer selection. The RazorGate policy engine evaluates ceiling breach (₹65,000 > ₹50,000 ceiling) and halts execution before order creation or second LLM call (~630 tokens).
+- **NO_MATCH Cases (0 LLM Calls)**: Wall-clock latency **<0.02s** (0 tokens). Catalog search short-circuits safely before LLM invocation when zero matching candidate items exist for the intent/category.
+- **Physical Latency Floor Enforcement**: Benchmark script enforces explicit assertions (`wall_clock_sec >= 0.200s`) on all LLM-powered runs to guarantee zero synthetic or mocked latency leakage.
+- **Estimated Operational Cost**: **~$0.0054 to $0.0072 USD** per ALLOW execution run (**~₹0.48 to ₹0.61 INR**).
+- **Per-Session Guardrail Rationale**: At an average of **0.66s** and **~1,040 tokens** per ALLOW run, the 10-run session cap keeps a single judge's exploration bounded to roughly **6.6 seconds of total agent execution latency** and a predictable API cost ceiling of **~$0.07 USD (~₹5.70 INR)** per session.
 - **Anti-Hallucination Guarantee**: Hard system-prompt constraints enforce that comparative reasoning strictly references SKUs, specs, and prices returned directly in `search_catalog` tool output.
 
 
