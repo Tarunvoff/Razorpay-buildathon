@@ -46,10 +46,11 @@ $$\text{risk\_weight} = 1.0 - \text{health\_score}$$
 ## Known Architectural Limitations (Scope Boundaries)
 Due to buildathon time constraints, several systems use simplified architectures. The following areas are identified as out-of-scope for the current implementation and would require structural redesign for production readiness:
 
-### 1. SQLite Write Contention at Scale
-- **Current State:** The system relies on a single SQLite database (`audit.db`) for storing all gate decisions.
-- **Limitation:** SQLite is highly vulnerable to locking and write contention under high concurrency.
-- **Future Fix:** Requires a DB migration to a production-grade relational database (e.g., PostgreSQL or MySQL) capable of handling concurrent transactions.
+### 1. Database Architecture & Opt-In PostgreSQL Migration Path
+- **Current State:** SQLite (`decisions.db`) remains the hard default for local development and live hackathon demos with zero behavior change (`DATABASE_URL` unset).
+- **Production-Ready PostgreSQL Path:** Implemented a pluggable `DecisionStore` abstraction (`backend/audit/db.py`) supporting an opt-in PostgreSQL backend behind `DATABASE_URL=postgresql://user:pass@localhost:5432/razorgate`.
+- **Schema & Data Migration Tools:** Includes fresh schema auto-provisioning and a data migration script (`migrate_sqlite_to_postgres.py`) to seamlessly transfer historical audit decision records from SQLite into PostgreSQL without downtime.
+- **Verification:** Both SQLite and PostgreSQL store implementations are verified with 100% test parity (`tests/test_postgres_store.py`).
 
 ### 2. SSE Single-Process Fanout
 - **Current State:** The Server-Sent Events (SSE) log tailing endpoint runs in memory on a single process.

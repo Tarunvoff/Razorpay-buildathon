@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     claude_base_url: Optional[str] = None
     claude_model: Optional[str] = None
     llm_provider: str = "claude"
+    database_url: Optional[str] = None
 
     @property
     def api_key(self) -> str:

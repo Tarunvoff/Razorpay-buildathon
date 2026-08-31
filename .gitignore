@@ -26,3 +26,21 @@ build/
 # Misc
 *.log
 .DS_Store
+
+# Test / CI artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime output & logs
+runtime/logs/
+*.jsonl
+
+# Scratch / temp directories
+scratch_*/
+tmp_*/
+
+# Loose temp output files at root
+out.txt
+final_output.txt
+*.tmp
