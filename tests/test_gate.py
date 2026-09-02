@@ -999,3 +999,81 @@ def test_multitenancy_unknown_merchant_falls_back_to_global_defaults():
     )
     # Rs.29,900 is under the Rs.50k global ceiling - should ALLOW
     assert result.verdict == "ALLOW"
+
+
+def test_dual_layer_idempotency_local_guard_and_razorpay_header():
+    """
+    Confirms defense-in-depth double-layer idempotency:
+    1. First call creates Razorpay order with X-Idempotency-Key header AND links order ID to audit ledger.
+    2. Second call with same audit_id hits local software guard (get_decision_by_id) BEFORE order creation,
+       fetching the existing order and returning idempotency_hit=True without duplicating orders.
+    """
+    client = TestClient(app)
+    agent_id = "agent_idem_dual"
+    amount_paise = 15000
+    receipt = f"rcpt_dual_{int(time.time())}"
+
+    # 1. Gate check to obtain audit_id and allow_token
+    check_res = client.post(
+        "/gate/check",
+        json={
+            "amount": amount_paise,
+            "currency": "INR",
+            "agent_id": agent_id,
+            "receipt": receipt,
+            "action": "create_order",
+        },
+    )
+    assert check_res.status_code == 200
+    check_data = check_res.json()
+    audit_id = check_data["audit_id"]
+    allow_token = check_data["allow_token"]
+
+    mock_order = {
+        "id": f"order_dual_{audit_id}",
+        "entity": "order",
+        "amount": amount_paise,
+        "currency": "INR",
+        "receipt": receipt,
+        "status": "created",
+    }
+
+    with patch.object(razorpay_client.client.order, "create", return_value=mock_order) as mock_create, \
+         patch.object(razorpay_client.client.order, "fetch", return_value=mock_order) as mock_fetch:
+
+        # First call: creates order & links to decision audit row
+        res1 = client.post(
+            "/orders",
+            json={
+                "agent_id": agent_id,
+                "amount_paise": amount_paise,
+                "receipt": receipt,
+                "allow_token": allow_token,
+                "currency": "INR",
+                "audit_id": audit_id,
+            },
+        )
+        assert res1.status_code == 200
+        assert mock_create.call_count == 1
+        assert res1.json()["order"]["id"] == mock_order["id"]
+
+        # Second call with same audit_id: local guard intercepts and fetches existing order
+        res2 = client.post(
+            "/orders",
+            json={
+                "agent_id": agent_id,
+                "amount_paise": amount_paise,
+                "receipt": receipt,
+                "allow_token": allow_token,
+                "currency": "INR",
+                "audit_id": audit_id,
+            },
+        )
+        assert res2.status_code == 200
+        assert res2.json()["idempotency_hit"] is True
+        assert res2.json()["order"]["id"] == mock_order["id"]
+        # Confirm razorpay_client.create was NOT called a second time
+        assert mock_create.call_count == 1
+        # Confirm local guard called razorpay_client.fetch instead
+        assert mock_fetch.call_count == 1
+

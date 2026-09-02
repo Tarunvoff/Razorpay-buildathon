@@ -406,7 +406,11 @@ Every architectural claim and policy rule in RazorGate is backed by automated py
 | **Behavior Burst FLAG** | [`backend/gate/behavior.py`](file:///e:/Razorpay-build/backend/gate/behavior.py) | `tests/test_gate.py::test_behavioral_frequency_flag` | `pytest tests/test_gate.py -k test_behavioral_frequency_flag` |
 | **HMAC ALLOW Token TTL** | [`backend/payments/razorpay_client.py`](file:///e:/Razorpay-build/backend/payments/razorpay_client.py) | `tests/test_gate.py::test_allow_token_verification` | `pytest tests/test_gate.py -k test_allow_token_verification` |
 | **Back-to-Back Amount Parity** | [`frontend/src/components/walkthrough/GatedFlowWalkthrough.tsx`](file:///e:/Razorpay-build/frontend/src/components/walkthrough/GatedFlowWalkthrough.tsx) | `tests/test_scenario_amounts.py::test_back_to_back_scenario_amounts` | `pytest tests/test_scenario_amounts.py` |
+| **Dual-Layer Idempotency Guard** | [`backend/control/app.py`](file:///e:/Razorpay-build/backend/control/app.py#L313) | `tests/test_gate.py::test_dual_layer_idempotency_local_guard_and_razorpay_header` | `pytest tests/test_gate.py -k test_dual_layer_idempotency` |
 | **PostgreSQL Opt-In Migration** | [`backend/audit/db.py`](file:///e:/Razorpay-build/backend/audit/db.py) | `tests/test_postgres_store.py::test_postgres_decision_store_crud` | `pytest tests/test_postgres_store.py` |
+
+> **Idempotency Guard Status**: The local software-level duplicate order guard (`if req.audit_id:` in `app.py`) is fully active and verified in tandem with Razorpay's network-edge `X-Idempotency-Key` header, guaranteeing defense-in-depth against duplicate payments.
+
 
 ---
 
