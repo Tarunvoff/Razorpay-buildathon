@@ -1,4 +1,4 @@
-﻿"""
+"""
 DecisionBroadcaster — Real-time SSE event fanout abstraction for RazorGate.
 
 Protocol mirrors the existing DecisionStore pattern in backend/audit/db.py.
