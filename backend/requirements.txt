@@ -12,3 +12,4 @@ redis[asyncio]
 pytest
 pytest-asyncio
 httpx
+requests>=2.32.4

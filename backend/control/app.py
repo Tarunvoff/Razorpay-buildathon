@@ -1,8 +1,11 @@
 import asyncio
 from contextlib import asynccontextmanager
 import json
+import logging
 from pathlib import Path
 import sys
+
+logger = logging.getLogger(__name__)
 from typing import Any, Dict, List, Optional
 
 # Ensure project root is in sys.path
@@ -71,9 +74,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:8008",
+    "http://127.0.0.1:8008",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -360,7 +372,11 @@ def create_order(req: CreateOrderRequest):
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Razorpay API Error: {str(e)}")
+        logger.error("Razorpay API Error in /orders: %s", str(e), exc_info=True)
+        raise HTTPException(
+            status_code=502,
+            detail="Razorpay API Error: Order execution failed downstream.",
+        )
 
 
 @app.post("/orders/verify")
